@@ -48,7 +48,7 @@ def test_trade_proposal_schema() -> None:
     proposal = TradeProposal(
         id="p1",
         created_at=datetime(2026, 7, 5, 9, 0, tzinfo=UTC),
-        strategy="S2",
+        strategy="S-A",
         symbol="AAPL",
         side="buy",
         target_weight=0.05,

@@ -18,7 +18,9 @@ provider = "deepseek"
 base_url = "https://api.deepseek.com"
 model = "deepseek-chat"
 api_key_env = "YQUANT_LLM_API_KEY"
-daily_budget_cny = 2.0
+# ADR-27: no hard daily budget cap. Optional soft alert threshold for the usage
+# meter; comment out or set to a value to get an alert. Spend is always accounted.
+# daily_budget_alert_cny = 5.0
 timeout_seconds = 45
 max_input_chars = 8000
 

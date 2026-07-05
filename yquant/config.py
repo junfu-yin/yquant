@@ -45,7 +45,10 @@ class LLMConfig:
     base_url: str
     model: str
     api_key_env: str
-    daily_budget_cny: float
+    # ADR-27: the daily budget is no longer a hard cap / circuit breaker; it is an
+    # optional soft alert threshold for the usage meter. None means no threshold
+    # (spend is still accounted in the llm_usage table regardless).
+    daily_budget_alert_cny: float | None
     timeout_seconds: int
     max_input_chars: int
 
@@ -133,11 +136,14 @@ def _data_config(raw: dict[str, Any]) -> DataConfig:
 
 
 def _llm_config(raw: dict[str, Any]) -> LLMConfig:
-    daily_budget = float(raw["daily_budget_cny"])
     timeout = int(raw["timeout_seconds"])
     max_input_chars = int(raw["max_input_chars"])
-    if daily_budget <= 0:
-        raise ConfigError("llm.daily_budget_cny must be positive")
+    # ADR-27: no hard budget cap. An optional soft alert threshold is allowed;
+    # absent or null means the usage meter simply accounts spend with no alert.
+    raw_alert = raw.get("daily_budget_alert_cny")
+    daily_budget_alert = float(raw_alert) if raw_alert is not None else None
+    if daily_budget_alert is not None and daily_budget_alert <= 0:
+        raise ConfigError("llm.daily_budget_alert_cny must be positive when set")
     if timeout <= 0:
         raise ConfigError("llm.timeout_seconds must be positive")
     if max_input_chars <= 0:
@@ -148,7 +154,7 @@ def _llm_config(raw: dict[str, Any]) -> LLMConfig:
         base_url=str(raw["base_url"]),
         model=str(raw["model"]),
         api_key_env=str(raw["api_key_env"]),
-        daily_budget_cny=daily_budget,
+        daily_budget_alert_cny=daily_budget_alert,
         timeout_seconds=timeout,
         max_input_chars=max_input_chars,
     )
