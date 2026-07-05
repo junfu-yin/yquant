@@ -3,4 +3,12 @@ __pycache__/
 *.pyc
 node_modules/
 .env
+.env.*
+!.env.example
 .DS_Store
+data/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/

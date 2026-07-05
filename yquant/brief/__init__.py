@@ -1,0 +1,2 @@
+"""AI brief generation modules."""
+

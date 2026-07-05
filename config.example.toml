@@ -1,0 +1,32 @@
+[runtime]
+timezone = "Asia/Shanghai"
+data_dir = "data"
+sqlite_path = "data/yquant.db"
+parquet_dir = "data/parquet"
+log_dir = "data/logs"
+
+[data]
+primary_source = "akshare"
+backup_sources = ["tushare", "baostock"]
+history_start = "2016-01-01"
+
+[llm]
+provider = "deepseek"
+base_url = "https://api.deepseek.com"
+model = "deepseek-chat"
+api_key_env = "YQUANT_LLM_API_KEY"
+daily_budget_cny = 2.0
+timeout_seconds = 45
+max_input_chars = 8000
+
+[risk]
+single_position_limit = 0.15
+industry_position_limit = 0.35
+drawdown_warning = 0.10
+drawdown_strong_warning = 0.15
+cooldown_loss_count = 3
+cooldown_trading_days = 3
+
+[notification.feishu]
+webhook_env = "YQUANT_FEISHU_WEBHOOK"
+

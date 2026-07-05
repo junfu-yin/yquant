@@ -1,0 +1,176 @@
+"""Configuration loading for yquant.
+
+The loader intentionally keeps secrets out of config files. Config contains the
+environment variable names, while the actual secret values stay in the runtime
+environment.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import date
+from pathlib import Path
+from typing import Any
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback
+    import tomli as tomllib  # type: ignore[no-redef]
+
+
+class ConfigError(ValueError):
+    """Raised when a config file is missing or invalid."""
+
+
+@dataclass(frozen=True)
+class RuntimeConfig:
+    timezone: str
+    data_dir: Path
+    sqlite_path: Path
+    parquet_dir: Path
+    log_dir: Path
+
+
+@dataclass(frozen=True)
+class DataConfig:
+    primary_source: str
+    backup_sources: tuple[str, ...]
+    history_start: date
+
+
+@dataclass(frozen=True)
+class LLMConfig:
+    provider: str
+    base_url: str
+    model: str
+    api_key_env: str
+    daily_budget_cny: float
+    timeout_seconds: int
+    max_input_chars: int
+
+
+@dataclass(frozen=True)
+class RiskConfig:
+    single_position_limit: float
+    industry_position_limit: float
+    drawdown_warning: float
+    drawdown_strong_warning: float
+    cooldown_loss_count: int
+    cooldown_trading_days: int
+
+
+@dataclass(frozen=True)
+class FeishuConfig:
+    webhook_env: str
+
+
+@dataclass(frozen=True)
+class NotificationConfig:
+    feishu: FeishuConfig
+
+
+@dataclass(frozen=True)
+class AppConfig:
+    runtime: RuntimeConfig
+    data: DataConfig
+    llm: LLMConfig
+    risk: RiskConfig
+    notification: NotificationConfig
+
+
+def load_config(path: str | Path = "config.example.toml") -> AppConfig:
+    config_path = Path(path)
+    if not config_path.exists():
+        raise ConfigError(f"config file does not exist: {config_path}")
+
+    with config_path.open("rb") as fh:
+        raw = tomllib.load(fh)
+
+    try:
+        runtime = _runtime_config(raw["runtime"])
+        data = _data_config(raw["data"])
+        llm = _llm_config(raw["llm"])
+        risk = _risk_config(raw["risk"])
+        notification = _notification_config(raw["notification"])
+    except KeyError as exc:
+        raise ConfigError(f"missing config section or key: {exc}") from exc
+    except TypeError as exc:
+        raise ConfigError(f"invalid config value type: {exc}") from exc
+
+    return AppConfig(
+        runtime=runtime,
+        data=data,
+        llm=llm,
+        risk=risk,
+        notification=notification,
+    )
+
+
+def _runtime_config(raw: dict[str, Any]) -> RuntimeConfig:
+    return RuntimeConfig(
+        timezone=str(raw["timezone"]),
+        data_dir=Path(raw["data_dir"]),
+        sqlite_path=Path(raw["sqlite_path"]),
+        parquet_dir=Path(raw["parquet_dir"]),
+        log_dir=Path(raw["log_dir"]),
+    )
+
+
+def _data_config(raw: dict[str, Any]) -> DataConfig:
+    return DataConfig(
+        primary_source=str(raw["primary_source"]),
+        backup_sources=tuple(str(item) for item in raw["backup_sources"]),
+        history_start=date.fromisoformat(str(raw["history_start"])),
+    )
+
+
+def _llm_config(raw: dict[str, Any]) -> LLMConfig:
+    daily_budget = float(raw["daily_budget_cny"])
+    timeout = int(raw["timeout_seconds"])
+    max_input_chars = int(raw["max_input_chars"])
+    if daily_budget <= 0:
+        raise ConfigError("llm.daily_budget_cny must be positive")
+    if timeout <= 0:
+        raise ConfigError("llm.timeout_seconds must be positive")
+    if max_input_chars <= 0:
+        raise ConfigError("llm.max_input_chars must be positive")
+
+    return LLMConfig(
+        provider=str(raw["provider"]),
+        base_url=str(raw["base_url"]),
+        model=str(raw["model"]),
+        api_key_env=str(raw["api_key_env"]),
+        daily_budget_cny=daily_budget,
+        timeout_seconds=timeout,
+        max_input_chars=max_input_chars,
+    )
+
+
+def _risk_config(raw: dict[str, Any]) -> RiskConfig:
+    cfg = RiskConfig(
+        single_position_limit=float(raw["single_position_limit"]),
+        industry_position_limit=float(raw["industry_position_limit"]),
+        drawdown_warning=float(raw["drawdown_warning"]),
+        drawdown_strong_warning=float(raw["drawdown_strong_warning"]),
+        cooldown_loss_count=int(raw["cooldown_loss_count"]),
+        cooldown_trading_days=int(raw["cooldown_trading_days"]),
+    )
+    _require_ratio("risk.single_position_limit", cfg.single_position_limit)
+    _require_ratio("risk.industry_position_limit", cfg.industry_position_limit)
+    _require_ratio("risk.drawdown_warning", cfg.drawdown_warning)
+    _require_ratio("risk.drawdown_strong_warning", cfg.drawdown_strong_warning)
+    if cfg.cooldown_loss_count <= 0:
+        raise ConfigError("risk.cooldown_loss_count must be positive")
+    if cfg.cooldown_trading_days <= 0:
+        raise ConfigError("risk.cooldown_trading_days must be positive")
+    return cfg
+
+
+def _notification_config(raw: dict[str, Any]) -> NotificationConfig:
+    return NotificationConfig(feishu=FeishuConfig(webhook_env=str(raw["feishu"]["webhook_env"])))
+
+
+def _require_ratio(name: str, value: float) -> None:
+    if not 0 < value < 1:
+        raise ConfigError(f"{name} must be between 0 and 1")
+
