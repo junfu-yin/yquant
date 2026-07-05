@@ -62,13 +62,29 @@ def _probe_trade_calendar(akshare: ModuleType) -> dict[str, Any]:
 
 
 def _probe_stock_list(akshare: ModuleType) -> dict[str, Any]:
-    fn = _required_callable(akshare, "stock_info_a_code_name")
-    frame = fn()
+    sh = _required_callable(akshare, "stock_info_sh_name_code")(symbol="主板A股")
+    sz = _required_callable(akshare, "stock_info_sz_name_code")(symbol="A股列表")
+    bj = _required_callable(akshare, "stock_info_bj_name_code")()
     return {
-        "function": "stock_info_a_code_name",
-        "rows": int(len(frame)),
-        "columns": [str(column) for column in frame.columns],
-        "head": _frame_head(frame),
+        "function": "stock_info_sh_name_code + stock_info_sz_name_code + stock_info_bj_name_code",
+        "rows": int(len(sh) + len(sz) + len(bj)),
+        "sources": {
+            "sh": {
+                "rows": int(len(sh)),
+                "columns": [str(column) for column in sh.columns],
+                "head": _frame_head(sh),
+            },
+            "sz": {
+                "rows": int(len(sz)),
+                "columns": [str(column) for column in sz.columns],
+                "head": _frame_head(sz),
+            },
+            "bj": {
+                "rows": int(len(bj)),
+                "columns": [str(column) for column in bj.columns],
+                "head": _frame_head(bj),
+            },
+        },
     }
 
 
@@ -80,6 +96,7 @@ def _probe_daily_bars(akshare: ModuleType, symbol: str) -> dict[str, Any]:
         start_date="20240101",
         end_date="20240115",
         adjust="qfq",
+        timeout=15,
     )
     return {
         "function": "stock_zh_a_hist",

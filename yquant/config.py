@@ -15,7 +15,7 @@ from typing import Any
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback
-    import tomli as tomllib  # type: ignore[no-redef]
+    import tomli as tomllib  # type: ignore[import-not-found,no-redef]
 
 
 class ConfigError(ValueError):
@@ -173,4 +173,3 @@ def _notification_config(raw: dict[str, Any]) -> NotificationConfig:
 def _require_ratio(name: str, value: float) -> None:
     if not 0 < value < 1:
         raise ConfigError(f"{name} must be between 0 and 1")
-

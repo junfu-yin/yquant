@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 import sys
 from pathlib import Path
 
 from yquant.config import ConfigError, load_config
 from yquant.probes.akshare import run_akshare_probe
 from yquant.probes.baostock import run_baostock_probe
-from yquant.probes.models import ProbeRun, write_probe_run
+from yquant.probes.models import CheckResult, ProbeRun, make_probe_run, utc_now_iso, write_probe_run
 from yquant.probes.tushare import run_tushare_probe
 from yquant.version import __version__
 
@@ -70,6 +71,12 @@ def build_parser() -> argparse.ArgumentParser:
     all_sources.add_argument("--tushare-token-env", default="YQUANT_TUSHARE_TOKEN")
     all_sources.add_argument("--baostock-code", default="sh.600000")
     all_sources.add_argument(
+        "--timeout-seconds",
+        type=int,
+        default=180,
+        help="timeout for each source probe subprocess",
+    )
+    all_sources.add_argument(
         "--output-dir",
         type=Path,
         default=Path("data/probes"),
@@ -119,14 +126,32 @@ def main(argv: list[str] | None = None) -> int:
         run = run_baostock_probe(code=args.code)
         return _write_and_print_probe(run, args.output_dir)
     if args.command == "probe" and args.probe_name == "all":
-        runs = [
-            run_akshare_probe(symbol=args.akshare_symbol),
-            run_tushare_probe(ts_code=args.tushare_ts_code, token_env=args.tushare_token_env),
-            run_baostock_probe(code=args.baostock_code),
+        commands = [
+            ("akshare", ["probe", "akshare", "--symbol", args.akshare_symbol]),
+            (
+                "tushare",
+                [
+                    "probe",
+                    "tushare",
+                    "--ts-code",
+                    args.tushare_ts_code,
+                    "--token-env",
+                    args.tushare_token_env,
+                ],
+            ),
+            ("baostock", ["probe", "baostock", "--code", args.baostock_code]),
         ]
         exit_code = 0
-        for run in runs:
-            exit_code = max(exit_code, _write_and_print_probe(run, args.output_dir))
+        for probe_name, command_args in commands:
+            exit_code = max(
+                exit_code,
+                _run_probe_subprocess(
+                    probe_name=probe_name,
+                    command_args=command_args,
+                    output_dir=args.output_dir,
+                    timeout_seconds=args.timeout_seconds,
+                ),
+            )
         return exit_code
 
     parser.print_help()
@@ -143,6 +168,44 @@ def _write_and_print_probe(run: ProbeRun, output_dir: Path) -> int:
         if check.error:
             print(f"  error: {check.error}")
     return 0 if run.status != "failed" else 1
+
+
+def _run_probe_subprocess(
+    *,
+    probe_name: str,
+    command_args: list[str],
+    output_dir: Path,
+    timeout_seconds: int,
+) -> int:
+    command = [sys.executable, "-m", "yquant", *command_args, "--output-dir", str(output_dir)]
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        run = make_probe_run(
+            probe_name=probe_name,
+            started_at=utc_now_iso(),
+            checks=[
+                CheckResult(
+                    name="probe_subprocess",
+                    status="failed",
+                    duration_seconds=float(timeout_seconds),
+                    error=f"timed out after {timeout_seconds}s: {' '.join(exc.cmd)}",
+                )
+            ],
+        )
+        return _write_and_print_probe(run, output_dir)
+
+    if completed.stdout:
+        print(completed.stdout, end="")
+    if completed.stderr:
+        print(completed.stderr, end="", file=sys.stderr)
+    return completed.returncode
 
 
 if __name__ == "__main__":
