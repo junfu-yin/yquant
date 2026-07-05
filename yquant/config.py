@@ -33,6 +33,7 @@ class RuntimeConfig:
 
 @dataclass(frozen=True)
 class DataConfig:
+    markets: tuple[str, ...]
     primary_source: str
     backup_sources: tuple[str, ...]
     history_start: date
@@ -117,7 +118,14 @@ def _runtime_config(raw: dict[str, Any]) -> RuntimeConfig:
 
 
 def _data_config(raw: dict[str, Any]) -> DataConfig:
+    markets = tuple(str(item).strip().lower() for item in raw["markets"])
+    for market in markets:
+        if market not in {"us", "hk"}:
+            raise ConfigError(f"data.markets only supports 'us'/'hk', got: {market!r}")
+    if not markets:
+        raise ConfigError("data.markets must not be empty")
     return DataConfig(
+        markets=markets,
         primary_source=str(raw["primary_source"]),
         backup_sources=tuple(str(item) for item in raw["backup_sources"]),
         history_start=date.fromisoformat(str(raw["history_start"])),

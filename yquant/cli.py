@@ -10,9 +10,12 @@ from pathlib import Path
 
 from yquant.config import ConfigError, load_config
 from yquant.probes.akshare import run_akshare_probe
-from yquant.probes.baostock import run_baostock_probe
+from yquant.probes.calendar import run_calendar_probe
+from yquant.probes.edgar import run_edgar_probe
+from yquant.probes.hkexnews import run_hkexnews_probe
 from yquant.probes.models import CheckResult, ProbeRun, make_probe_run, utc_now_iso, write_probe_run
-from yquant.probes.tushare import run_tushare_probe
+from yquant.probes.stooq import run_stooq_probe
+from yquant.probes.yfinance_probe import run_yfinance_probe
 from yquant.version import __version__
 
 
@@ -33,55 +36,59 @@ def build_parser() -> argparse.ArgumentParser:
     probe = subparsers.add_parser("probe", help="run WP0 assumption probes")
     probe_subparsers = probe.add_subparsers(dest="probe_name", required=True)
 
-    akshare = probe_subparsers.add_parser("akshare", help="probe AkShare interfaces")
-    akshare.add_argument("--symbol", default="600000", help="A-share symbol for sample bar fetch")
-    akshare.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("data/probes"),
-        help="directory for JSON probe evidence",
-    )
+    def add_output_dir(sub: argparse.ArgumentParser) -> None:
+        sub.add_argument(
+            "--output-dir",
+            type=Path,
+            default=Path("data/probes"),
+            help="directory for JSON probe evidence",
+        )
 
-    tushare = probe_subparsers.add_parser("tushare", help="probe Tushare Pro interfaces")
-    tushare.add_argument("--ts-code", default="600000.SH", help="Tushare ts_code for sample calls")
-    tushare.add_argument(
-        "--token-env",
-        default="YQUANT_TUSHARE_TOKEN",
-        help="Tushare token env var",
-    )
-    tushare.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("data/probes"),
-        help="directory for JSON probe evidence",
-    )
+    yfinance = probe_subparsers.add_parser("yfinance", help="probe yfinance (primary US/HK bars)")
+    yfinance.add_argument("--us-symbol", default="AAPL", help="US ticker for sample bar fetch")
+    yfinance.add_argument("--hk-symbol", default="0700.HK", help="HK ticker for sample bar fetch")
+    yfinance.add_argument("--index-symbol", default="^GSPC", help="index symbol for sample fetch")
+    add_output_dir(yfinance)
 
-    baostock = probe_subparsers.add_parser("baostock", help="probe BaoStock interfaces")
-    baostock.add_argument("--code", default="sh.600000", help="BaoStock code for sample calls")
-    baostock.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("data/probes"),
-        help="directory for JSON probe evidence",
+    akshare = probe_subparsers.add_parser("akshare", help="probe AkShare (backup US/HK bars)")
+    akshare.add_argument("--us-symbol", default="AAPL", help="US symbol for sample bar fetch")
+    akshare.add_argument("--hk-symbol", default="00700", help="HK symbol for sample bar fetch")
+    add_output_dir(akshare)
+
+    stooq = probe_subparsers.add_parser("stooq", help="probe Stooq (backup US/index bars)")
+    stooq.add_argument("--us-symbol", default="AAPL", help="US symbol for sample bar fetch")
+    stooq.add_argument("--index-symbol", default="^SPX", help="index symbol for sample fetch")
+    add_output_dir(stooq)
+
+    edgar = probe_subparsers.add_parser("edgar", help="probe SEC EDGAR (US announcements)")
+    edgar.add_argument("--symbol", default="AAPL", help="US ticker for filing lookup")
+    edgar.add_argument(
+        "--user-agent-env",
+        default="YQUANT_SEC_USER_AGENT",
+        help="env var holding the SEC fair-access User-Agent",
     )
+    add_output_dir(edgar)
+
+    hkexnews = probe_subparsers.add_parser("hkexnews", help="probe HKEXnews (HK announcements)")
+    hkexnews.add_argument("--symbol", default="0700.HK", help="HK ticker for filing lookup")
+    add_output_dir(hkexnews)
+
+    calendar = probe_subparsers.add_parser("calendar", help="probe pandas_market_calendars")
+    calendar.add_argument("--start", default="2024-01-01", help="schedule start date")
+    calendar.add_argument("--end", default="2024-01-31", help="schedule end date")
+    add_output_dir(calendar)
 
     all_sources = probe_subparsers.add_parser("all", help="probe all configured data sources")
-    all_sources.add_argument("--akshare-symbol", default="600000")
-    all_sources.add_argument("--tushare-ts-code", default="600000.SH")
-    all_sources.add_argument("--tushare-token-env", default="YQUANT_TUSHARE_TOKEN")
-    all_sources.add_argument("--baostock-code", default="sh.600000")
+    all_sources.add_argument("--us-symbol", default="AAPL")
+    all_sources.add_argument("--hk-symbol", default="0700.HK")
+    all_sources.add_argument("--index-symbol", default="^GSPC")
     all_sources.add_argument(
         "--timeout-seconds",
         type=int,
         default=180,
         help="timeout for each source probe subprocess",
     )
-    all_sources.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("data/probes"),
-        help="directory for JSON probe evidence",
-    )
+    add_output_dir(all_sources)
 
     return parser
 
@@ -101,6 +108,7 @@ def _doctor(config_path: Path) -> int:
     print(f"timezone: {cfg.runtime.timezone}")
     print(f"data_dir: {cfg.runtime.data_dir}")
     print(f"sqlite_path: {cfg.runtime.sqlite_path}")
+    print(f"markets: {', '.join(cfg.data.markets)}")
     print(f"primary_source: {cfg.data.primary_source}")
     print(f"backup_sources: {', '.join(cfg.data.backup_sources)}")
     print(f"llm_provider: {cfg.llm.provider}")
@@ -116,46 +124,64 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "doctor":
         return _doctor(args.config)
-    if args.command == "probe" and args.probe_name == "akshare":
-        run = run_akshare_probe(symbol=args.symbol)
-        return _write_and_print_probe(run, args.output_dir)
-    if args.command == "probe" and args.probe_name == "tushare":
-        run = run_tushare_probe(ts_code=args.ts_code, token_env=args.token_env)
-        return _write_and_print_probe(run, args.output_dir)
-    if args.command == "probe" and args.probe_name == "baostock":
-        run = run_baostock_probe(code=args.code)
-        return _write_and_print_probe(run, args.output_dir)
-    if args.command == "probe" and args.probe_name == "all":
-        commands = [
-            ("akshare", ["probe", "akshare", "--symbol", args.akshare_symbol]),
-            (
-                "tushare",
-                [
-                    "probe",
-                    "tushare",
-                    "--ts-code",
-                    args.tushare_ts_code,
-                    "--token-env",
-                    args.tushare_token_env,
-                ],
-            ),
-            ("baostock", ["probe", "baostock", "--code", args.baostock_code]),
-        ]
-        exit_code = 0
-        for probe_name, command_args in commands:
-            exit_code = max(
-                exit_code,
-                _run_probe_subprocess(
-                    probe_name=probe_name,
-                    command_args=command_args,
-                    output_dir=args.output_dir,
-                    timeout_seconds=args.timeout_seconds,
-                ),
-            )
-        return exit_code
+    if args.command == "probe":
+        return _run_probe(args)
 
     parser.print_help()
     return 0
+
+
+def _run_probe(args: argparse.Namespace) -> int:
+    if args.probe_name == "yfinance":
+        run = run_yfinance_probe(
+            us_symbol=args.us_symbol,
+            hk_symbol=args.hk_symbol,
+            index_symbol=args.index_symbol,
+        )
+        return _write_and_print_probe(run, args.output_dir)
+    if args.probe_name == "akshare":
+        run = run_akshare_probe(us_symbol=args.us_symbol, hk_symbol=args.hk_symbol)
+        return _write_and_print_probe(run, args.output_dir)
+    if args.probe_name == "stooq":
+        run = run_stooq_probe(us_symbol=args.us_symbol, index_symbol=args.index_symbol)
+        return _write_and_print_probe(run, args.output_dir)
+    if args.probe_name == "edgar":
+        run = run_edgar_probe(symbol=args.symbol, user_agent=os.getenv(args.user_agent_env))
+        return _write_and_print_probe(run, args.output_dir)
+    if args.probe_name == "hkexnews":
+        run = run_hkexnews_probe(symbol=args.symbol)
+        return _write_and_print_probe(run, args.output_dir)
+    if args.probe_name == "calendar":
+        run = run_calendar_probe(start=args.start, end=args.end)
+        return _write_and_print_probe(run, args.output_dir)
+    if args.probe_name == "all":
+        return _run_probe_all(args)
+    return 0
+
+
+def _run_probe_all(args: argparse.Namespace) -> int:
+    commands = [
+        ("yfinance", ["probe", "yfinance", "--us-symbol", args.us_symbol,
+                      "--hk-symbol", args.hk_symbol, "--index-symbol", args.index_symbol]),
+        ("akshare", ["probe", "akshare", "--us-symbol", args.us_symbol,
+                     "--hk-symbol", args.hk_symbol.split(".")[0]]),
+        ("stooq", ["probe", "stooq", "--us-symbol", args.us_symbol]),
+        ("edgar", ["probe", "edgar", "--symbol", args.us_symbol]),
+        ("hkexnews", ["probe", "hkexnews", "--symbol", args.hk_symbol]),
+        ("calendar", ["probe", "calendar"]),
+    ]
+    exit_code = 0
+    for probe_name, command_args in commands:
+        exit_code = max(
+            exit_code,
+            _run_probe_subprocess(
+                probe_name=probe_name,
+                command_args=command_args,
+                output_dir=args.output_dir,
+                timeout_seconds=args.timeout_seconds,
+            ),
+        )
+    return exit_code
 
 
 def _write_and_print_probe(run: ProbeRun, output_dir: Path) -> int:

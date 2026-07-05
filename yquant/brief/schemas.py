@@ -10,17 +10,19 @@ from pydantic import BaseModel, Field, field_validator
 
 class EventCard(BaseModel):
     symbol: str
+    market: Literal["us", "hk"]
     source_type: Literal["announcement", "news", "price_action", "financial"]
     event_type: Literal[
-        "业绩相关",
+        "业绩财报",
+        "指引调整",
         "回购增持",
-        "减持",
-        "股权质押",
+        "内部人交易",
+        "并购重组",
         "重大合同",
-        "监管处分",
+        "监管调查",
         "诉讼仲裁",
-        "资产重组",
-        "分红送转",
+        "股权融资/增发",
+        "分红拆股",
         "人事变动",
         "异动提示",
         "其他",

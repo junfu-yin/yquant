@@ -1,4 +1,5 @@
 [runtime]
+# Internal storage is UTC; this is the display timezone (Beijing time).
 timezone = "Asia/Shanghai"
 data_dir = "data"
 sqlite_path = "data/yquant.db"
@@ -6,9 +7,11 @@ parquet_dir = "data/parquet"
 log_dir = "data/logs"
 
 [data]
-primary_source = "akshare"
-backup_sources = ["tushare", "baostock"]
-history_start = "2016-01-01"
+# Markets in scope: US (primary) and HK (secondary). A-shares are out of scope.
+markets = ["us", "hk"]
+primary_source = "yfinance"
+backup_sources = ["akshare", "stooq"]
+history_start = "2010-01-01"
 
 [llm]
 provider = "deepseek"

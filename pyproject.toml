@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "yquant"
 version = "0.1.0"
-description = "Local A-share research copilot and discipline engine."
+description = "Local US/HK equity research copilot and discipline engine."
 authors = ["Junfu Yin <junfu.yin@gmail.com>"]
 readme = "README.md"
 packages = [{ include = "yquant" }]
@@ -10,12 +10,12 @@ packages = [{ include = "yquant" }]
 python = ">=3.11,<3.14"
 apscheduler = "^3.10.4"
 backtrader = ">=1.9.78,<2.0"
-cn2an = ">=0.5.22,<1.0"
 duckdb = "^1.1.3"
 empyrical = ">=0.5.5,<1.0"
 loguru = "^0.7.2"
 openai = "^1.59.0"
 pandas = "^2.2.3"
+pandas-market-calendars = ">=4.4,<6.0"
 pyarrow = "^18.1.0"
 pydantic = "^2.10.4"
 pydantic-settings = "^2.7.0"
@@ -28,9 +28,9 @@ typer = "^0.15.1"
 optional = true
 
 [tool.poetry.group.datasource.dependencies]
+yfinance = ">=0.2.40,<1.0"
 akshare = ">=1.17,<2.0"
-baostock = ">=0.8,<1.0"
-tushare = ">=1.4,<2.0"
+pandas-datareader = ">=0.10,<1.0"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.14.1"
