@@ -1,9 +1,8 @@
-"""US/HK market microstructure and settlement rules.
+"""US market microstructure and settlement rules.
 
-Neither US nor HK equities have A-share style daily price limits. What matters
-for the backtest/broker layer is the settlement cycle, whether intraday trading
-is allowed, the PDT constraint (US), and the volatility-control facts (US LULD /
-market circuit breaker, HK VCM / closing-auction band).
+US equities have no A-share style daily price-limit rule. What matters for the
+backtest/broker layer is settlement, intraday trading, PDT, LULD/halt facts, and
+market-level circuit breakers.
 
 `market_rules` is a pure function so the rest of the code gets a typed object
 instead of scattering magic numbers. Effective dates and exact fee/rule values
@@ -19,7 +18,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Literal
 
-Market = Literal["us", "hk"]
+Market = Literal["us"]
 
 # US moved from T+2 to T+1 settlement on 2024-05-28 (SEC rule 15c6-1).
 US_T1_SETTLEMENT_START = date(2024, 5, 28)
@@ -30,12 +29,6 @@ US_CIRCUIT_BREAKER_LEVELS: tuple[Decimal, ...] = (
     Decimal("0.13"),
     Decimal("0.20"),
 )
-
-# HK Volatility Control Mechanism: ±10% deviation from reference price.
-HK_VCM_BAND_PCT = Decimal("0.10")
-# HK Closing Auction Session order band: ±5% of reference price.
-HK_CAS_BAND_PCT = Decimal("0.05")
-
 
 @dataclass(frozen=True)
 class PdtRule:
@@ -65,10 +58,8 @@ class MarketRuleSet:
     """Settlement and microstructure rules applicable to a symbol on a day.
 
     `volatility_band_pct` is `None` for US because LULD is tier-based rather than
-    a single fixed percentage; the broker enforces it as "fill price must stay in
-    that day's [low, high]" instead. For HK it is the VCM ±10% band.
-    `closing_auction_band_pct` is the HK CAS ±5% band (US closing auctions have no
-    fixed band). `circuit_breaker_levels` is empty for HK (no market-level halt).
+    a single fixed percentage; the broker/backtest layer handles this as
+    halt/reject behavior, not as a daily price-limit band.
     """
 
     market: Market
@@ -88,31 +79,19 @@ def market_rules(symbol: str, market: str, day: date) -> MarketRuleSet:
     date requires the market trading calendar, which M1 owns.
     """
 
-    del symbol  # Reserved for future symbol-level exceptions (e.g. ADR-listed HK names).
+    del symbol  # Reserved for future symbol-level exceptions.
     normalized = _normalize_market(market)
 
-    if normalized == "us":
-        settlement = 1 if day >= US_T1_SETTLEMENT_START else 2
-        return MarketRuleSet(
-            market="us",
-            settlement_days=settlement,
-            allows_intraday=True,
-            circuit_breaker_levels=US_CIRCUIT_BREAKER_LEVELS,
-            volatility_band_pct=None,
-            closing_auction_band_pct=None,
-            pdt=US_PDT_RULE,
-            reason=f"us_t{settlement}_settlement",
-        )
-
+    settlement = 1 if day >= US_T1_SETTLEMENT_START else 2
     return MarketRuleSet(
-        market="hk",
-        settlement_days=2,
+        market=normalized,
+        settlement_days=settlement,
         allows_intraday=True,
-        circuit_breaker_levels=(),
-        volatility_band_pct=HK_VCM_BAND_PCT,
-        closing_auction_band_pct=HK_CAS_BAND_PCT,
-        pdt=None,
-        reason="hk_t2_settlement",
+        circuit_breaker_levels=US_CIRCUIT_BREAKER_LEVELS,
+        volatility_band_pct=None,
+        closing_auction_band_pct=None,
+        pdt=US_PDT_RULE,
+        reason=f"us_t{settlement}_settlement",
     )
 
 
@@ -124,12 +103,8 @@ def _normalize_market(market: str) -> Market:
         "nyse": "us",
         "nasdaq": "us",
         "amex": "us",
-        "hk": "hk",
-        "hkex": "hk",
-        "hkg": "hk",
-        "sehk": "hk",
     }
     normalized = aliases.get(value, value)
-    if normalized not in {"us", "hk"}:
-        raise ValueError(f"unsupported market: {market!r} (expected 'us' or 'hk')")
-    return normalized  # type: ignore[return-value]
+    if normalized != "us":
+        raise ValueError(f"unsupported market: {market!r} (v3.1a expected 'us')")
+    return "us"

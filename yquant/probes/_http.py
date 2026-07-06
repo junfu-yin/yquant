@@ -1,4 +1,4 @@
-"""Shared HTTP helpers for announcement probes (EDGAR / HKEXnews).
+"""Shared HTTP helpers for announcement probes.
 
 These sources are official HTTP/JSON endpoints, not pip packages, so the probe
 pattern here is "reachability + response shape" rather than "dynamic import".

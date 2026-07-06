@@ -80,6 +80,33 @@ Remaining implementation debt:
 - State-machine gates such as RiskOn/VIX/trend for 2x are not wired yet. This
   pass enforces static budget/instrument gates only.
 
+## 2026-07-06 - Active Scope Cleanup: US-only Execution
+
+Baseline:
+- Head commit before this pass: `b1debc4`.
+- Goal from the staged implementation plan: remove HK/AkShare/HKEX semantics
+  from active code paths while preserving historical research context.
+
+Completed changes:
+- Cost model is US-only and tax-free in the active path, matching v3.1a's USD
+  execution scope and explicit tax-model exclusion.
+- Market rules only accept US aliases and reject HK/other markets.
+- EventCard and DataRepo protocol types no longer expose HK as an active market.
+- AkShare and HKEX probe modules were removed from `yquant.probes`; their old
+  results remain in research as historical context only.
+- `WP0_PROBE_FINDINGS.md` now carries a supersession note so old A-share/HK
+  probe conclusions are not mistaken for the current plan.
+- `poetry.lock` was regenerated after removing inactive datasource dependencies.
+
+Reasoning:
+- Keeping inactive markets in active types and tests makes future M1/M2 code
+  ambiguous. v3.1a deliberately narrowed execution to US stocks and US-listed
+  ETFs, so active code should say "no" early.
+
+Remaining implementation debt:
+- Some research files still mention old probes for audit history; that is
+  intentional and should not drive implementation.
+
 Non-goals:
 - No full M1 data repository.
 - No UI.

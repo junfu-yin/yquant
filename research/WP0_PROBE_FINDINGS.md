@@ -2,6 +2,11 @@
 
 Status: implementation research notes, not part of `docs/`.
 
+> Historical note: this file records the pre-v3.1a A-share/HK-era probe work.
+> It is preserved for audit context only. Current v3.1a active probes are
+> yfinance, Stooq, EDGAR, and US trading calendars; AkShare/Tushare/BaoStock and
+> HKEXnews are not active implementation paths.
+
 Probe date: 2026-07-05  
 Branch: `feat/wp0-foundation`
 
@@ -106,4 +111,3 @@ Implementation impact:
 3. AkShare should be kept for announcements and broad metadata, but公告正文 remains unresolved.
 4. Tushare token is needed before finalizing AS-3/AS-4. Until then, financial `announce_date` remains an unresolved assumption.
 5. Probe execution must keep subprocess timeouts. External data APIs are not reliable enough to call without guardrails.
-

@@ -50,9 +50,11 @@ Done:
 - The full local quality baseline is green.
 - M5 proposal creation now requires invalidation/red-team metadata and enforces
   static Overlay/2x/3x/icebox guardrails.
+- Active market rules, cost model, EventCard schema, and DataRepo protocol are
+  US-only.
+- Legacy AkShare/HKEX probe modules were removed from the active package.
 
 Not done:
-- Legacy HK/AkShare/HKEX code still exists in inactive modules and tests.
 - Proposal rejects are not yet ledgered as `risk_event` rows.
 - Dynamic 2x gates (RiskOn, trend, VIX) are not wired yet.
 - M1 DataRepo, manifest, and storage are still future work.

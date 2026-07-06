@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from typing import Any, cast
 
 import pytest
 from pydantic import ValidationError
@@ -27,19 +28,19 @@ def test_event_card_schema_accepts_valid_card() -> None:
     assert str(card.source_url) == "https://www.sec.gov/cgi-bin/browse-edgar"
 
 
-def test_event_card_rejects_invalid_severity() -> None:
+def test_event_card_rejects_inactive_hk_market() -> None:
     with pytest.raises(ValidationError):
         EventCard(
             symbol="0700.HK",
-            market="hk",
+            market=cast(Any, "hk"),
             source_type="announcement",
             event_type="内部人交易",
-            severity=6,
+            severity=4,
             direction="利空",
             one_line="Substantial shareholder reduced holdings",
             key_numbers=[],
             rationale="Sizable disposal",
-            source_url="https://www1.hkexnews.hk/",
+            source_url="https://www.sec.gov/",
             prompt_version="brief_v1",
         )
 

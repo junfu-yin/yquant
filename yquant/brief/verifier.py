@@ -1,11 +1,11 @@
 """Numeric verification helpers for LLM event cards.
 
-The main market is US (English filings), with HK as secondary. Source numbers
-therefore appear in English forms: ``$1.2B`` / ``1,200 million`` / ``10,000,000``
-/ ``10.00%`` / ``(1,234)`` (parenthesised negative) / ``US$3.5M``. Verification
-normalises both the claimed number and every candidate in the source text to a
-common magnitude, then compares within a tolerance. Only a claimed number that
-still cannot be matched after normalisation is treated as fabricated.
+The active execution market is US. Source numbers normally appear in English
+filings: ``$1.2B`` / ``1,200 million`` / ``10,000,000`` / ``10.00%`` /
+``(1,234)`` (parenthesised negative) / ``US$3.5M``. Verification normalises both
+the claimed number and every candidate in the source text to a common magnitude,
+then compares within a tolerance. Only a claimed number that still cannot be
+matched after normalisation is treated as fabricated.
 """
 
 from __future__ import annotations
@@ -27,8 +27,8 @@ UNIT_MULTIPLIERS = {
     "bn": Decimal("1000000000"),
 }
 
-# Currency symbols/prefixes stripped before parsing (US$, HK$, $, £, €, ¥).
-_CURRENCY_RE = re.compile(r"(?:US|HK|C|A|S|NT)?\$|[£€¥]")
+# Currency symbols/prefixes stripped before parsing (US$, $, £, €, ¥).
+_CURRENCY_RE = re.compile(r"(?:US)?\$|[£€¥]")
 
 # A numeric token: optional parenthesis (negative), digits with optional
 # thousands separators and decimals, optional magnitude unit, optional percent.

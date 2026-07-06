@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, field_validator
 
 class EventCard(BaseModel):
     symbol: str
-    market: Literal["us", "hk"]
+    market: Literal["us"]
     source_type: Literal["announcement", "news", "price_action", "financial"]
     event_type: Literal[
         "业绩财报",

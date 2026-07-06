@@ -29,7 +29,6 @@ optional = true
 
 [tool.poetry.group.datasource.dependencies]
 yfinance = ">=0.2.40,<1.0"
-akshare = ">=1.17,<2.0"
 pandas-datareader = ">=0.10,<1.0"
 
 [tool.poetry.group.dev.dependencies]

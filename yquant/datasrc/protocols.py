@@ -51,6 +51,6 @@ class DataRepo(Protocol):
     def get_universe(
         self,
         on_date: date,
-        market: Literal["us", "hk", "all"] = "all",
+        market: Literal["us", "all"] = "all",
     ) -> list[str]:
         """Return the symbols listed and alive on ``on_date`` (survivorship-safe)."""

@@ -1,1 +1,1 @@
-"""Data source adapters and repository interfaces for US/HK markets."""
+"""Data source adapters and repository interfaces for the US execution market."""
