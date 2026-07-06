@@ -208,6 +208,88 @@ def build_parser() -> argparse.ArgumentParser:
         help="directory for live reconciliation artifacts; defaults to data_dir/quality",
     )
 
+    data_load_securities = data_subparsers.add_parser(
+        "load-securities",
+        help="load a survivorship-safe security master from a CSV",
+    )
+    data_load_securities.add_argument(
+        "--config",
+        type=Path,
+        default=Path("config.example.toml"),
+        help="config file to use",
+    )
+    data_load_securities.add_argument(
+        "--csv",
+        required=True,
+        type=Path,
+        help="CSV with columns symbol,market,listing_date[,delisting_date]",
+    )
+
+    data_universe = data_subparsers.add_parser(
+        "universe",
+        help="print the point-in-time tradable universe on a date",
+    )
+    data_universe.add_argument(
+        "--config",
+        type=Path,
+        default=Path("config.example.toml"),
+        help="config file to use",
+    )
+    data_universe.add_argument(
+        "--on-date",
+        required=True,
+        help="as-of session date, YYYY-MM-DD",
+    )
+    data_universe.add_argument(
+        "--market",
+        default="all",
+        choices=["us", "all"],
+        help="restrict to a market or 'all'",
+    )
+
+    data_update_macro = data_subparsers.add_parser(
+        "update-macro",
+        help="fetch and persist macro/index level series",
+    )
+    data_update_macro.add_argument(
+        "--config",
+        type=Path,
+        default=Path("config.example.toml"),
+        help="config file to use",
+    )
+    data_update_macro.add_argument(
+        "--series",
+        required=True,
+        help="comma-separated series ids, e.g. ^GSPC,^VIX",
+    )
+    data_update_macro.add_argument("--start", required=True, help="inclusive start, YYYY-MM-DD")
+    data_update_macro.add_argument("--end", required=True, help="inclusive end, YYYY-MM-DD")
+
+    data_asof = data_subparsers.add_parser(
+        "asof",
+        help="read bars as known at a point in time (replay lookahead guard)",
+    )
+    data_asof.add_argument(
+        "--config",
+        type=Path,
+        default=Path("config.example.toml"),
+        help="config file to use",
+    )
+    data_asof.add_argument("--symbols", required=True, help="comma-separated tickers")
+    data_asof.add_argument("--start", required=True, help="inclusive start, YYYY-MM-DD")
+    data_asof.add_argument("--end", required=True, help="inclusive end, YYYY-MM-DD")
+    data_asof.add_argument(
+        "--as-of-utc",
+        required=True,
+        help="point-in-time cutoff in UTC ISO format, e.g. 2024-02-01T00:45:00Z",
+    )
+    data_asof.add_argument(
+        "--adjust",
+        default="adjusted",
+        choices=["none", "adjusted"],
+        help="price adjustment view",
+    )
+
     schedule = subparsers.add_parser("schedule", help="run unattended M1 jobs")
     schedule_subparsers = schedule.add_subparsers(dest="schedule_command", required=True)
 
@@ -345,6 +427,14 @@ def _run_data(args: argparse.Namespace) -> int:
         return _run_data_reconcile(args)
     if args.data_command == "reconcile-live":
         return _run_data_reconcile_live(args)
+    if args.data_command == "load-securities":
+        return _run_data_load_securities(args)
+    if args.data_command == "universe":
+        return _run_data_universe(args)
+    if args.data_command == "update-macro":
+        return _run_data_update_macro(args)
+    if args.data_command == "asof":
+        return _run_data_asof(args)
     return 0
 
 
@@ -544,6 +634,109 @@ def _run_data_reconcile_live(args: argparse.Namespace) -> int:
     print(f"consistency_rate: {report.consistency_rate:.6f}")
     print(f"quality_artifact: {artifact_path}")
     return 0 if report.passed else 1
+
+
+def _run_data_load_securities(args: argparse.Namespace) -> int:
+    import pandas as pd
+
+    try:
+        cfg = load_config(args.config)
+        if not args.csv.exists():
+            raise ValueError(f"security master CSV does not exist: {args.csv}")
+        frame = pd.read_csv(args.csv)
+    except (ConfigError, ValueError) as exc:
+        print(f"data load-securities error: {exc}", file=sys.stderr)
+        return 2
+
+    repo = LocalDataRepo(cfg.runtime.parquet_dir)
+    try:
+        master = repo.write_security_master(frame)
+    except ValueError as exc:
+        print(f"data load-securities error: {exc}", file=sys.stderr)
+        return 2
+    print("data_load_securities: security_master")
+    print(f"rows: {len(master)}")
+    print(f"storage: {repo.security_master_path}")
+    return 0
+
+
+def _run_data_universe(args: argparse.Namespace) -> int:
+    try:
+        cfg = load_config(args.config)
+        on_date = date.fromisoformat(args.on_date)
+    except (ConfigError, ValueError) as exc:
+        print(f"data universe error: {exc}", file=sys.stderr)
+        return 2
+
+    repo = LocalDataRepo(cfg.runtime.parquet_dir)
+    symbols = repo.get_universe(on_date, args.market)
+    source = "security_master" if not repo.get_security_master().empty else "bar_presence"
+    print("data_universe: tradable universe")
+    print(f"on_date: {on_date.isoformat()}")
+    print(f"market: {args.market}")
+    print(f"source: {source}")
+    print(f"count: {len(symbols)}")
+    print(f"symbols: {', '.join(symbols) if symbols else '(none)'}")
+    return 0
+
+
+def _run_data_asof(args: argparse.Namespace) -> int:
+    try:
+        cfg = load_config(args.config)
+        start = date.fromisoformat(args.start)
+        end = date.fromisoformat(args.end)
+        as_of = _parse_deadline_utc(args.as_of_utc)
+        if as_of is None:
+            raise ValueError("--as-of-utc must be a UTC ISO timestamp")
+        symbols = normalize_symbols(_split_symbols(args.symbols))
+        if not symbols:
+            raise ValueError("--symbols must include at least one ticker")
+    except (ConfigError, ValueError) as exc:
+        print(f"data asof error: {exc}", file=sys.stderr)
+        return 2
+
+    repo = LocalDataRepo(cfg.runtime.parquet_dir)
+    bars = repo.get_bars_asof(symbols, start, end, as_of, args.adjust)
+    print("data_asof: daily_bars")
+    print(f"as_of_utc: {as_of.isoformat()}")
+    print(f"range: {start.isoformat()}..{end.isoformat()}")
+    print(f"rows: {len(bars)}")
+    if not bars.empty:
+        latest = bars.groupby("symbol")["date"].max()
+        for symbol in symbols:
+            latest_date = latest.get(symbol)
+            shown = latest_date.isoformat() if latest_date is not None else "(none)"
+            print(f"- {symbol}: latest_visible_date={shown}")
+    return 0
+
+
+def _run_data_update_macro(args: argparse.Namespace) -> int:
+    from yquant.datasrc.macro import MacroUpdater, YFinanceMacroSource
+
+    try:
+        cfg = load_config(args.config)
+        start = date.fromisoformat(args.start)
+        end = date.fromisoformat(args.end)
+        series_ids = _split_symbols(args.series)
+        if not series_ids:
+            raise ValueError("--series must include at least one series id")
+    except (ConfigError, ValueError) as exc:
+        print(f"data update-macro error: {exc}", file=sys.stderr)
+        return 2
+
+    repo = LocalDataRepo(cfg.runtime.parquet_dir)
+    report = MacroUpdater(repo, YFinanceMacroSource()).update(series_ids, start, end)
+    print("data_update_macro: macro_series")
+    print(f"series: {', '.join(report.series_ids)}")
+    print(f"range: {report.start.isoformat()}..{report.end.isoformat()}")
+    for attempt in report.attempts:
+        print(f"- {attempt.series_id} {attempt.source}: {attempt.status} rows={attempt.row_count}")
+        if attempt.error:
+            print(f"  error: {attempt.error}")
+    if report.failed_series:
+        print(f"failed_series: {', '.join(report.failed_series)}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def _run_schedule(args: argparse.Namespace) -> int:
