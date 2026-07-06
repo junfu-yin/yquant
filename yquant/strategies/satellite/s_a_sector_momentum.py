@@ -9,7 +9,7 @@ challenger comparison for LLM satellites (09 §7).
 from __future__ import annotations
 
 from datetime import date
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from yquant.strategies.base import (
     ExplainContract,
@@ -91,7 +91,7 @@ class SectorMomentumProvider:
 
         inferences: list[Inference] = []
         for etf in ranked:
-            action = "buy" if etf in selected else "hold"
+            action: Literal["buy", "hold"] = "buy" if etf in selected else "hold"
             inferences.append(
                 Inference(
                     symbol=etf,

@@ -1,4 +1,4 @@
-"""Shared types for the core-satellite-hedge architecture (03 §5.3, 09 §1).
+"""Shared types for the core-satellite-overlay architecture (03 §5.3, 09 §1).
 
 Every signal source—rule strategies (core C1-C3, satellite S-A), LLM scorers
 (S-B/S-C) and future NN scorers—implements the same :class:`SignalProvider`
@@ -19,8 +19,8 @@ from pydantic import BaseModel, Field, model_validator
 if TYPE_CHECKING:
     from yquant.datasrc.protocols import DataRepo
 
-# The three portfolio layers of the v3 architecture (03 §5.3 / 12 §4).
-Layer = Literal["core", "satellite", "hedge"]
+# The three portfolio layers of the v3.1a architecture (03 §3).
+Layer = Literal["core", "satellite", "overlay"]
 
 # Provider kinds drive the J3 contamination rule (09 §2, ADR-24): only
 # llm / ml_blackbox providers require a knowledge_cutoff and have their

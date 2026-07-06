@@ -1,21 +1,22 @@
 """Trading-calendar WP0 probe (pandas_market_calendars).
 
-The M7 scheduler and M1 quality checks need trading calendars for NYSE, NASDAQ
-and HKEX, including US daylight-saving shifts, half-days and HK typhoon/black-
-rain closures. This probe confirms ``pandas_market_calendars`` exposes each
-market and returns a non-empty schedule. Imported dynamically so a missing
-package is probe evidence, not an import-time crash.
+The M7 scheduler and M1 quality checks need US trading calendars, including
+daylight-saving shifts and half-days. This probe confirms
+``pandas_market_calendars`` exposes each market and returns a non-empty
+schedule. Imported dynamically so a missing package is probe evidence, not an
+import-time crash.
 """
 
 from __future__ import annotations
 
 import importlib
+from collections.abc import Callable
 from types import ModuleType
 from typing import Any
 
 from yquant.probes.models import CheckResult, make_probe_run, run_check, skipped_check, utc_now_iso
 
-_MARKETS = {"us_nyse": "NYSE", "us_nasdaq": "NASDAQ", "hk": "HKEX"}
+_MARKETS = {"us_nyse": "NYSE", "us_nasdaq": "NASDAQ"}
 
 
 def run_calendar_probe(start: str = "2024-01-01", end: str = "2024-01-31") -> Any:
@@ -41,10 +42,20 @@ def run_calendar_probe(start: str = "2024-01-01", end: str = "2024-01-31") -> An
         return make_probe_run("calendar", started_at, checks)
 
     for name, exchange in _MARKETS.items():
-        checks.append(
-            run_check(name, lambda exchange=exchange: _probe_schedule(mcal, exchange, start, end))
-        )
+        checks.append(run_check(name, _make_schedule_check(mcal, exchange, start, end)))
     return make_probe_run("calendar", started_at, checks)
+
+
+def _make_schedule_check(
+    mcal: ModuleType,
+    exchange: str,
+    start: str,
+    end: str,
+) -> Callable[[], dict[str, Any]]:
+    def check() -> dict[str, Any]:
+        return _probe_schedule(mcal, exchange, start, end)
+
+    return check
 
 
 def _probe_schedule(mcal: ModuleType, exchange: str, start: str, end: str) -> dict[str, Any]:

@@ -8,7 +8,7 @@ backend. Prices/returns are passed as plain sequences ordered oldest→newest.
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 TRADING_DAYS_PER_YEAR = 252
 TRADING_MONTHS_PER_YEAR = 12
@@ -90,8 +90,8 @@ def ewma_annualized_vol(
 
 
 def portfolio_returns(
-    weights: dict[str, float],
-    per_symbol_returns: dict[str, Sequence[float]],
+    weights: Mapping[str, float],
+    per_symbol_returns: Mapping[str, Sequence[float]],
 ) -> list[float]:
     """Weighted portfolio return series from aligned per-symbol return series."""
 

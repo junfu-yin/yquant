@@ -48,14 +48,20 @@ class LLMConfig:
     # ADR-27: the daily budget is no longer a hard cap / circuit breaker; it is an
     # optional soft alert threshold for the usage meter. None means no threshold
     # (spend is still accounted in the llm_usage table regardless).
-    daily_budget_alert_cny: float | None
+    daily_budget_alert_usd: float | None
     timeout_seconds: int
     max_input_chars: int
 
 
 @dataclass(frozen=True)
 class RiskConfig:
+    core_budget: float
+    satellite_budget: float
+    overlay_budget: float
     single_position_limit: float
+    overlay_single_position_limit: float
+    leveraged_etf_total_limit: float
+    leveraged_etf_single_limit: float
     industry_position_limit: float
     drawdown_warning: float
     drawdown_strong_warning: float
@@ -123,8 +129,8 @@ def _runtime_config(raw: dict[str, Any]) -> RuntimeConfig:
 def _data_config(raw: dict[str, Any]) -> DataConfig:
     markets = tuple(str(item).strip().lower() for item in raw["markets"])
     for market in markets:
-        if market not in {"us", "hk"}:
-            raise ConfigError(f"data.markets only supports 'us'/'hk', got: {market!r}")
+        if market != "us":
+            raise ConfigError(f"data.markets only supports 'us' in v3.1a, got: {market!r}")
     if not markets:
         raise ConfigError("data.markets must not be empty")
     return DataConfig(
@@ -140,10 +146,10 @@ def _llm_config(raw: dict[str, Any]) -> LLMConfig:
     max_input_chars = int(raw["max_input_chars"])
     # ADR-27: no hard budget cap. An optional soft alert threshold is allowed;
     # absent or null means the usage meter simply accounts spend with no alert.
-    raw_alert = raw.get("daily_budget_alert_cny")
+    raw_alert = raw.get("daily_budget_alert_usd")
     daily_budget_alert = float(raw_alert) if raw_alert is not None else None
     if daily_budget_alert is not None and daily_budget_alert <= 0:
-        raise ConfigError("llm.daily_budget_alert_cny must be positive when set")
+        raise ConfigError("llm.daily_budget_alert_usd must be positive when set")
     if timeout <= 0:
         raise ConfigError("llm.timeout_seconds must be positive")
     if max_input_chars <= 0:
@@ -154,7 +160,7 @@ def _llm_config(raw: dict[str, Any]) -> LLMConfig:
         base_url=str(raw["base_url"]),
         model=str(raw["model"]),
         api_key_env=str(raw["api_key_env"]),
-        daily_budget_alert_cny=daily_budget_alert,
+        daily_budget_alert_usd=daily_budget_alert,
         timeout_seconds=timeout,
         max_input_chars=max_input_chars,
     )
@@ -162,14 +168,28 @@ def _llm_config(raw: dict[str, Any]) -> LLMConfig:
 
 def _risk_config(raw: dict[str, Any]) -> RiskConfig:
     cfg = RiskConfig(
+        core_budget=float(raw["core_budget"]),
+        satellite_budget=float(raw["satellite_budget"]),
+        overlay_budget=float(raw["overlay_budget"]),
         single_position_limit=float(raw["single_position_limit"]),
+        overlay_single_position_limit=float(raw["overlay_single_position_limit"]),
+        leveraged_etf_total_limit=float(raw["leveraged_etf_total_limit"]),
+        leveraged_etf_single_limit=float(raw["leveraged_etf_single_limit"]),
         industry_position_limit=float(raw["industry_position_limit"]),
         drawdown_warning=float(raw["drawdown_warning"]),
         drawdown_strong_warning=float(raw["drawdown_strong_warning"]),
         cooldown_loss_count=int(raw["cooldown_loss_count"]),
         cooldown_trading_days=int(raw["cooldown_trading_days"]),
     )
+    _require_ratio("risk.core_budget", cfg.core_budget)
+    _require_ratio("risk.satellite_budget", cfg.satellite_budget)
+    _require_ratio("risk.overlay_budget", cfg.overlay_budget)
+    if abs((cfg.core_budget + cfg.satellite_budget + cfg.overlay_budget) - 1.0) > 1e-9:
+        raise ConfigError("risk core/satellite/overlay budgets must sum to 1")
     _require_ratio("risk.single_position_limit", cfg.single_position_limit)
+    _require_ratio("risk.overlay_single_position_limit", cfg.overlay_single_position_limit)
+    _require_ratio("risk.leveraged_etf_total_limit", cfg.leveraged_etf_total_limit)
+    _require_ratio("risk.leveraged_etf_single_limit", cfg.leveraged_etf_single_limit)
     _require_ratio("risk.industry_position_limit", cfg.industry_position_limit)
     _require_ratio("risk.drawdown_warning", cfg.drawdown_warning)
     _require_ratio("risk.drawdown_strong_warning", cfg.drawdown_strong_warning)

@@ -27,7 +27,8 @@ _FULL_TEXT_SEARCH_URL = "https://efts.sec.gov/LATEST/search-index"
 def run_edgar_probe(symbol: str = "AAPL", user_agent: str | None = None) -> Any:
     started_at = utc_now_iso()
     checks: list[CheckResult] = []
-    headers = {"User-Agent": user_agent or os.getenv("YQUANT_SEC_USER_AGENT", DEFAULT_USER_AGENT)}
+    sec_user_agent = user_agent or os.getenv("YQUANT_SEC_USER_AGENT") or DEFAULT_USER_AGENT
+    headers: dict[str, str] = {"User-Agent": sec_user_agent}
     cik_holder: dict[str, str] = {}
 
     def resolve_cik() -> dict[str, Any]:

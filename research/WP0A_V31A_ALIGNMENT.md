@@ -1,0 +1,57 @@
+# WP0a v3.1a Alignment Plan
+
+Status: implementation-side alignment note, not part of `docs/`.
+
+## Current Repository Reality
+
+The repository is no longer documentation-only. The July 5 commits introduced:
+- WP0 probe framework and dependency lock files.
+- US/HK market rules and probe commands.
+- Core strategy sketches: C1, C2, C3.
+- Satellite S-A sketch and LLM satellite provider contracts.
+- M8 risk mechanisms: trend gate, vol target, circuit breaker, crowding.
+- M5 proposal/checklist/risk-rule sketches.
+
+These pieces are useful, but they predate the final v3.1a scope.
+
+## v3.1a Alignment Targets
+
+Runtime defaults:
+- Business timezone: `America/New_York`.
+- Currency: USD.
+- Execution universe: US stocks and US-listed ETFs only.
+- Direct HK trading, multi-currency accounting, AkShare/HKEX implementation
+  paths: not active scope.
+
+Hard guardrails:
+- Core/Satellite/Overlay budgets are 75/15/10.
+- Overlay total cap is 10%.
+- Overlay single-position cap is 5%.
+- 2x long ETF total cap is 5%, single cap is 3%.
+- 3x and inverse ETFs are rejected in current scope.
+- Icebox tickers are rejected unless a formal change process unlocks them.
+- Discretionary, meme-stock, social-hype, and "high confidence" ideas count as
+  Overlay; confidence never breaks caps.
+
+## Near-Term Acceptance
+
+WP0a is acceptable when:
+- `pytest`, `ruff`, and `mypy` all pass.
+- Runtime config defaults match v3.1a.
+- Tests cover the guardrails above as pure logic.
+- Any remaining US/HK-era code is either removed from active paths or explicitly
+  parked as historical/icebox implementation debt.
+
+## 2026-07-06 Status
+
+Done:
+- Active runtime config and CLI probe paths match the v3.1a execution domain.
+- Overlay/icebox guardrails exist as tested pure logic.
+- The full local quality baseline is green.
+
+Not done:
+- Legacy HK/AkShare/HKEX code still exists in inactive modules and tests.
+- Proposal schemas do not yet require `invalidation_condition` and
+  `red_team_note`.
+- The 6-item v3.1a checklist is not implemented yet.
+- M1 DataRepo, manifest, and storage are still future work.

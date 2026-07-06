@@ -1,7 +1,9 @@
 from datetime import date
+from typing import cast
 
 import pytest
 
+from yquant.datasrc.protocols import DataRepo
 from yquant.strategies.base import SignalProvider
 from yquant.strategies.satellite import (
     EarningsScoreProvider,
@@ -68,7 +70,7 @@ def test_llm_provider_predict_emits_llm_inferences() -> None:
         return [LlmScore(symbol="AAPL", score=0.6, confidence=0.7, evidence=["sec.gov/x"])]
 
     s_b = EarningsScoreProvider(_scorer, knowledge_cutoff=date(2023, 12, 31))
-    inferences = s_b.predict(date(2024, 6, 3), ["AAPL"], repo=object())
+    inferences = s_b.predict(date(2024, 6, 3), ["AAPL"], repo=cast(DataRepo, object()))
 
     assert len(inferences) == 1
     inf = inferences[0]

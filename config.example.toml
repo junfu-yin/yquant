@@ -1,16 +1,16 @@
 [runtime]
-# Internal storage is UTC; this is the display timezone (Beijing time).
-timezone = "Asia/Shanghai"
+# Internal storage is UTC; business scheduling follows XNYS / New York time.
+timezone = "America/New_York"
 data_dir = "data"
 sqlite_path = "data/yquant.db"
 parquet_dir = "data/parquet"
 log_dir = "data/logs"
 
 [data]
-# Markets in scope: US (primary) and HK (secondary). A-shares are out of scope.
-markets = ["us", "hk"]
+# v3.1a execution scope: US stocks and US-listed ETFs only.
+markets = ["us"]
 primary_source = "yfinance"
-backup_sources = ["akshare", "stooq"]
+backup_sources = ["stooq"]
 history_start = "2010-01-01"
 
 [llm]
@@ -18,14 +18,21 @@ provider = "deepseek"
 base_url = "https://api.deepseek.com"
 model = "deepseek-chat"
 api_key_env = "YQUANT_LLM_API_KEY"
-# ADR-27: no hard daily budget cap. Optional soft alert threshold for the usage
-# meter; comment out or set to a value to get an alert. Spend is always accounted.
-# daily_budget_alert_cny = 5.0
+# ADR-27: no hard daily budget cap. Optional soft USD alert threshold for the
+# usage meter; comment out or set to a value to get an alert. Spend is always
+# accounted.
+# daily_budget_alert_usd = 5.0
 timeout_seconds = 45
 max_input_chars = 8000
 
 [risk]
+core_budget = 0.75
+satellite_budget = 0.15
+overlay_budget = 0.10
 single_position_limit = 0.15
+overlay_single_position_limit = 0.05
+leveraged_etf_total_limit = 0.05
+leveraged_etf_single_limit = 0.03
 industry_position_limit = 0.35
 drawdown_warning = 0.10
 drawdown_strong_warning = 0.15

@@ -9,10 +9,8 @@ import sys
 from pathlib import Path
 
 from yquant.config import ConfigError, load_config
-from yquant.probes.akshare import run_akshare_probe
 from yquant.probes.calendar import run_calendar_probe
 from yquant.probes.edgar import run_edgar_probe
-from yquant.probes.hkexnews import run_hkexnews_probe
 from yquant.probes.models import CheckResult, ProbeRun, make_probe_run, utc_now_iso, write_probe_run
 from yquant.probes.stooq import run_stooq_probe
 from yquant.probes.yfinance_probe import run_yfinance_probe
@@ -44,16 +42,10 @@ def build_parser() -> argparse.ArgumentParser:
             help="directory for JSON probe evidence",
         )
 
-    yfinance = probe_subparsers.add_parser("yfinance", help="probe yfinance (primary US/HK bars)")
+    yfinance = probe_subparsers.add_parser("yfinance", help="probe yfinance (primary US bars)")
     yfinance.add_argument("--us-symbol", default="AAPL", help="US ticker for sample bar fetch")
-    yfinance.add_argument("--hk-symbol", default="0700.HK", help="HK ticker for sample bar fetch")
     yfinance.add_argument("--index-symbol", default="^GSPC", help="index symbol for sample fetch")
     add_output_dir(yfinance)
-
-    akshare = probe_subparsers.add_parser("akshare", help="probe AkShare (backup US/HK bars)")
-    akshare.add_argument("--us-symbol", default="AAPL", help="US symbol for sample bar fetch")
-    akshare.add_argument("--hk-symbol", default="00700", help="HK symbol for sample bar fetch")
-    add_output_dir(akshare)
 
     stooq = probe_subparsers.add_parser("stooq", help="probe Stooq (backup US/index bars)")
     stooq.add_argument("--us-symbol", default="AAPL", help="US symbol for sample bar fetch")
@@ -69,10 +61,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_output_dir(edgar)
 
-    hkexnews = probe_subparsers.add_parser("hkexnews", help="probe HKEXnews (HK announcements)")
-    hkexnews.add_argument("--symbol", default="0700.HK", help="HK ticker for filing lookup")
-    add_output_dir(hkexnews)
-
     calendar = probe_subparsers.add_parser("calendar", help="probe pandas_market_calendars")
     calendar.add_argument("--start", default="2024-01-01", help="schedule start date")
     calendar.add_argument("--end", default="2024-01-31", help="schedule end date")
@@ -80,7 +68,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     all_sources = probe_subparsers.add_parser("all", help="probe all configured data sources")
     all_sources.add_argument("--us-symbol", default="AAPL")
-    all_sources.add_argument("--hk-symbol", default="0700.HK")
     all_sources.add_argument("--index-symbol", default="^GSPC")
     all_sources.add_argument(
         "--timeout-seconds",
@@ -135,21 +122,14 @@ def _run_probe(args: argparse.Namespace) -> int:
     if args.probe_name == "yfinance":
         run = run_yfinance_probe(
             us_symbol=args.us_symbol,
-            hk_symbol=args.hk_symbol,
             index_symbol=args.index_symbol,
         )
-        return _write_and_print_probe(run, args.output_dir)
-    if args.probe_name == "akshare":
-        run = run_akshare_probe(us_symbol=args.us_symbol, hk_symbol=args.hk_symbol)
         return _write_and_print_probe(run, args.output_dir)
     if args.probe_name == "stooq":
         run = run_stooq_probe(us_symbol=args.us_symbol, index_symbol=args.index_symbol)
         return _write_and_print_probe(run, args.output_dir)
     if args.probe_name == "edgar":
         run = run_edgar_probe(symbol=args.symbol, user_agent=os.getenv(args.user_agent_env))
-        return _write_and_print_probe(run, args.output_dir)
-    if args.probe_name == "hkexnews":
-        run = run_hkexnews_probe(symbol=args.symbol)
         return _write_and_print_probe(run, args.output_dir)
     if args.probe_name == "calendar":
         run = run_calendar_probe(start=args.start, end=args.end)
@@ -162,12 +142,9 @@ def _run_probe(args: argparse.Namespace) -> int:
 def _run_probe_all(args: argparse.Namespace) -> int:
     commands = [
         ("yfinance", ["probe", "yfinance", "--us-symbol", args.us_symbol,
-                      "--hk-symbol", args.hk_symbol, "--index-symbol", args.index_symbol]),
-        ("akshare", ["probe", "akshare", "--us-symbol", args.us_symbol,
-                     "--hk-symbol", args.hk_symbol.split(".")[0]]),
+                      "--index-symbol", args.index_symbol]),
         ("stooq", ["probe", "stooq", "--us-symbol", args.us_symbol]),
         ("edgar", ["probe", "edgar", "--symbol", args.us_symbol]),
-        ("hkexnews", ["probe", "hkexnews", "--symbol", args.hk_symbol]),
         ("calendar", ["probe", "calendar"]),
     ]
     exit_code = 0

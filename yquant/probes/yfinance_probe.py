@@ -1,8 +1,8 @@
-"""yfinance WP0 probe (primary US/HK market-data source).
+"""yfinance WP0 probe (primary US market-data source).
 
 Imports yfinance dynamically: a missing package is probe evidence, not an
 import-time crash. Verifies daily bars, split/dividend actions, and index data
-for both markets. Network flakiness is expected; each check captures its own
+for US symbols. Network flakiness is expected; each check captures its own
 failure.
 """
 
@@ -18,7 +18,6 @@ from yquant.probes.models import CheckResult, make_probe_run, run_check, skipped
 
 def run_yfinance_probe(
     us_symbol: str = "AAPL",
-    hk_symbol: str = "0700.HK",
     index_symbol: str = "^GSPC",
 ) -> Any:
     started_at = utc_now_iso()
@@ -39,7 +38,6 @@ def run_yfinance_probe(
         checks.extend(
             [
                 skipped_check("us_daily_bars", "yfinance import failed"),
-                skipped_check("hk_daily_bars", "yfinance import failed"),
                 skipped_check("split_dividend_actions", "yfinance import failed"),
                 skipped_check("index_bars", "yfinance import failed"),
             ]
@@ -47,7 +45,6 @@ def run_yfinance_probe(
         return make_probe_run("yfinance", started_at, checks)
 
     checks.append(run_check("us_daily_bars", lambda: _probe_daily_bars(yfinance, us_symbol)))
-    checks.append(run_check("hk_daily_bars", lambda: _probe_daily_bars(yfinance, hk_symbol)))
     checks.append(
         run_check("split_dividend_actions", lambda: _probe_actions(yfinance, us_symbol))
     )

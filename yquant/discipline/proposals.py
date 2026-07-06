@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 from datetime import datetime
+from typing import Literal
 
 from yquant.discipline.schemas import TradeProposal
 from yquant.strategies.base import TargetPortfolio
@@ -73,7 +74,7 @@ def build_proposals(
         if abs(delta) < min_weight_change:
             continue
 
-        side = "buy" if delta > 0 else "sell"
+        side: Literal["buy", "sell"] = "buy" if delta > 0 else "sell"
         price = prices.get(symbol)
         if price is None:
             continue
