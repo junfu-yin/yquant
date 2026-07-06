@@ -65,6 +65,19 @@ def reconcile_daily_bars(
         if price_column not in frame.columns:
             raise ValueError(f"{frame_name} daily bars missing price column: {price_column}")
 
+    if left_bars.empty and right_bars.empty:
+        return ReconciliationReport(
+            dataset="daily_bars",
+            left_source=left_source,
+            right_source=right_source,
+            tolerance_bps=tolerance_bps,
+            minimum_consistency_rate=minimum_consistency_rate,
+            compared_rows=0,
+            missing_left_rows=0,
+            missing_right_rows=0,
+            mismatches=(),
+        )
+
     left_cmp = left_bars.loc[:, ["symbol", "date", price_column]].rename(
         columns={price_column: "left_value"}
     )

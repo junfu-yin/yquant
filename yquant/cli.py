@@ -19,6 +19,7 @@ from yquant.datasrc import (
     check_daily_bar_freshness,
     expected_daily_bar_deadline_utc,
     reconcile_daily_bars,
+    run_sampled_live_reconciliation,
     write_report_artifact,
 )
 from yquant.datasrc.bars import normalize_symbols
@@ -147,6 +148,58 @@ def build_parser() -> argparse.ArgumentParser:
         help="directory for reconciliation artifacts; defaults to data_dir/quality",
     )
 
+    data_reconcile_live = data_subparsers.add_parser(
+        "reconcile-live",
+        help="sample symbols, fetch both sources live, and reconcile",
+    )
+    data_reconcile_live.add_argument(
+        "--config",
+        type=Path,
+        default=Path("config.example.toml"),
+        help="config file to use",
+    )
+    data_reconcile_live.add_argument(
+        "--symbols",
+        default=None,
+        help="comma-separated ticker pool to sample; defaults to the repo universe",
+    )
+    data_reconcile_live.add_argument("--start", required=True, help="inclusive start, YYYY-MM-DD")
+    data_reconcile_live.add_argument("--end", required=True, help="inclusive end, YYYY-MM-DD")
+    data_reconcile_live.add_argument(
+        "--on-date",
+        default=None,
+        help="universe as-of date when sampling from the repo; defaults to --end",
+    )
+    data_reconcile_live.add_argument(
+        "--sample-size",
+        type=int,
+        default=None,
+        help="number of symbols to sample; defaults to the whole pool",
+    )
+    data_reconcile_live.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="random seed for reproducible sampling evidence",
+    )
+    data_reconcile_live.add_argument("--left-source", default="yfinance")
+    data_reconcile_live.add_argument("--right-source", default="stooq")
+    data_reconcile_live.add_argument("--price-column", default="close_raw")
+    data_reconcile_live.add_argument("--tolerance-bps", type=float, default=10.0)
+    data_reconcile_live.add_argument("--minimum-consistency-rate", type=float, default=0.995)
+    data_reconcile_live.add_argument(
+        "--request-pause-seconds",
+        type=float,
+        default=0.0,
+        help="pause between symbols to stay within source rate limits",
+    )
+    data_reconcile_live.add_argument(
+        "--quality-dir",
+        type=Path,
+        default=None,
+        help="directory for live reconciliation artifacts; defaults to data_dir/quality",
+    )
+
     probe = subparsers.add_parser("probe", help="run WP0 assumption probes")
     probe_subparsers = probe.add_subparsers(dest="probe_name", required=True)
 
@@ -243,6 +296,8 @@ def _run_data(args: argparse.Namespace) -> int:
         return _run_data_freshness(args)
     if args.data_command == "reconcile":
         return _run_data_reconcile(args)
+    if args.data_command == "reconcile-live":
+        return _run_data_reconcile_live(args)
     return 0
 
 
@@ -387,6 +442,63 @@ def _run_data_reconcile(args: argparse.Namespace) -> int:
     return 0 if report.passed else 1
 
 
+def _run_data_reconcile_live(args: argparse.Namespace) -> int:
+    try:
+        cfg = load_config(args.config)
+        start = date.fromisoformat(args.start)
+        end = date.fromisoformat(args.end)
+        on_date = date.fromisoformat(args.on_date) if args.on_date else None
+        symbols = normalize_symbols(_split_symbols(args.symbols)) if args.symbols else None
+        left_source = _daily_bar_source(args.left_source)
+        right_source = _daily_bar_source(args.right_source)
+    except (ConfigError, ValueError) as exc:
+        print(f"data reconcile-live error: {exc}", file=sys.stderr)
+        return 2
+
+    repo = LocalDataRepo(cfg.runtime.parquet_dir)
+    try:
+        report = run_sampled_live_reconciliation(
+            left_source,
+            right_source,
+            start=start,
+            end=end,
+            symbols=symbols,
+            repo=repo,
+            on_date=on_date,
+            sample_size=args.sample_size,
+            seed=args.seed,
+            price_column=args.price_column,
+            tolerance_bps=args.tolerance_bps,
+            minimum_consistency_rate=args.minimum_consistency_rate,
+            request_pause_seconds=args.request_pause_seconds,
+        )
+    except ValueError as exc:
+        print(f"data reconcile-live error: {exc}", file=sys.stderr)
+        return 2
+
+    artifact_path = write_report_artifact(
+        report,
+        _quality_output_dir(cfg.runtime.data_dir, args.quality_dir),
+        kind="daily_bars_live_reconciliation",
+    )
+    reconciliation = report.reconciliation
+    print("data_reconcile_live: daily_bars")
+    print(f"range: {start.isoformat()}..{end.isoformat()}")
+    print(f"sources: {reconciliation.left_source} vs {reconciliation.right_source}")
+    print(f"universe_size: {report.universe_size}")
+    print(f"sample_size: {report.sample_size} seed: {report.seed}")
+    print(f"sampled_symbols: {', '.join(report.sampled_symbols)}")
+    print(f"left_fetch_failures: {report.left_fetch_failures}")
+    print(f"right_fetch_failures: {report.right_fetch_failures}")
+    print(f"compared_rows: {reconciliation.compared_rows}")
+    print(f"missing_left_rows: {reconciliation.missing_left_rows}")
+    print(f"missing_right_rows: {reconciliation.missing_right_rows}")
+    print(f"mismatches: {len(reconciliation.mismatches)}")
+    print(f"consistency_rate: {report.consistency_rate:.6f}")
+    print(f"quality_artifact: {artifact_path}")
+    return 0 if report.passed else 1
+
+
 def _split_symbols(raw: str) -> list[str]:
     return [symbol for chunk in raw.split(",") for symbol in [chunk.strip()] if symbol]
 
@@ -414,6 +526,10 @@ def _freshness_deadline(args: argparse.Namespace, expected_date: date) -> dateti
 
 def _quality_output_dir(data_dir: Path, override: Path | None) -> Path:
     return override if override is not None else data_dir / "quality"
+
+
+def _daily_bar_source(source_name: str) -> DailyBarSource:
+    return _daily_bar_sources([source_name])[0]
 
 
 def _daily_bar_sources(source_names: list[str]) -> list[DailyBarSource]:
