@@ -112,3 +112,42 @@ Non-goals:
 - No UI.
 - No broker automation.
 - No LLM production flow.
+
+## 2026-07-06 - M1 Minimum Daily-Bar Data Foundation
+
+Baseline:
+- Head commit before this pass: `cd17a8c`.
+- Goal from the staged implementation plan: start M1 with a small, testable
+  daily-bar foundation instead of wiring strategies directly to yfinance/Stooq.
+
+Completed changes:
+- Added a canonical `daily_bars` schema that stores raw and adjusted OHLC prices
+  side by side, plus volume, estimated amount, adjustment factor, halt/session
+  fields, source, market, and UTC as-of timestamp.
+- Added pure normalizers for yfinance and Stooq daily bars. yfinance derives a
+  back-adjustment factor from `Adj Close / Close`; Stooq is treated as raw
+  unadjusted backup data until a richer adjustment source is introduced.
+- Added a `LocalDataRepo` backed by Parquet with append/upsert semantics keyed
+  by `symbol/date/source`, and a DataRepo read shape that can return either raw
+  or adjusted prices.
+- Added lightweight JSONL data manifests with deterministic content hashes.
+- Added daily-bar quality checks for required columns, duplicate keys,
+  non-positive prices, OHLC range violations, negative volume/amount, and missing
+  expected symbols.
+- Added offline unit tests for normalization, quality failures, manifest hash
+  stability, empty repository reads, Parquet round trip, and upsert behavior.
+
+Reasoning:
+- M1 must become the only route into market data. A local normalized store with a
+  manifest is the minimum structure needed before M2 backtests, M3 strategies,
+  and M9 macro/state logic can be trusted.
+- Keeping adapter tests synthetic avoids CI/network flakiness while still
+  freezing the source-to-canonical schema contract.
+
+Remaining implementation debt:
+- No batch update job, retry/cutover policy, or source freshness report yet.
+- No dual-source reconciliation report for yfinance vs Stooq yet.
+- Universe membership is still a minimum bar-presence view, not a
+  survivorship-safe historical constituent database.
+- Macro series, EDGAR documents, SQLite ledger tables, and replay/as-of CLI are
+  still future work.
