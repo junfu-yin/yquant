@@ -58,10 +58,11 @@ Done:
   and quality checks.
 - M1 daily-bar updates now have a source-ordered updater, manual CLI entry, and
   pure yfinance/Stooq reconciliation report logic.
+- M1 daily-bar update and freshness checks now write JSON quality artifacts.
 
 Not done:
 - Proposal rejects are not yet ledgered as `risk_event` rows.
 - Dynamic 2x gates (RiskOn, trend, VIX) are not wired yet.
-- M1 scheduled update/retry/backoff, persisted reconciliation reports,
-  survivorship-safe universe membership, macro series, and replay/as-of CLI are
-  still future work.
+- M1 scheduled update/retry/backoff, XNYS-derived freshness deadlines, persisted
+  reconciliation jobs, survivorship-safe universe membership, macro series, and
+  replay/as-of CLI are still future work.

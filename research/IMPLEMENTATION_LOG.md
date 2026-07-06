@@ -194,3 +194,46 @@ Remaining implementation debt:
 - Reconciliation is not yet persisted as a quality report artifact.
 - No retry/backoff policy; current fallback is source-order only.
 - No macro/index batch update path yet.
+
+## 2026-07-06 - M1 Quality Artifacts and Freshness Precheck
+
+Baseline:
+- Head commit before this pass: `2c6e9b4`.
+- Goal from the staged implementation plan: make M1 update outcomes auditable
+  before introducing scheduler or ledger persistence.
+
+Completed changes:
+- Added generic JSON artifact helpers for M1 report objects. Artifacts include a
+  normalized kind, UTC generation timestamp, JSON-safe dataclass payload, and
+  computed report fields such as `passed`.
+- `yquant data update` now writes a `daily_bars_update` quality artifact under
+  `data_dir/quality` by default, with an override via `--quality-dir`.
+- Added daily-bar freshness checks over the local `DataRepo`, with per-symbol
+  `fresh`, `late`, `stale`, or `missing` statuses.
+- Added `yquant data freshness` for local, non-network freshness verification
+  against an expected session date and optional UTC deadline.
+- Added tests covering artifact serialization, freshness states, CLI parsing,
+  and UTC deadline parsing.
+
+Reasoning:
+- M1 cannot be considered operational until every data update has a durable
+  quality artifact. This creates a handoff point for future M7 scheduling,
+  alerting, and incident collection without coupling those modules now.
+- Freshness is deliberately checked from the local repository, not by calling
+  providers, so it answers "what does the system currently know?" rather than
+  "can the internet fetch something now?"
+
+Verification:
+- `python -m pytest`: 108 passed.
+- `python -m ruff check .`: passed.
+- `python -m mypy yquant tests`: passed.
+- `python -m yquant data update --help`: passed.
+- `python -m yquant data freshness --help`: passed.
+
+Remaining implementation debt:
+- Reconciliation reports are still pure objects; they are not yet wired to a
+  command or scheduled sampled quality job.
+- Freshness deadlines are caller-provided; XNYS calendar close + 45 minute
+  deadline calculation is still future work.
+- No APScheduler job, retry/backoff, persisted ledger event, or alerting path
+  yet.

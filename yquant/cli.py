@@ -7,7 +7,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Callable
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from yquant.config import ConfigError, load_config
@@ -16,6 +16,8 @@ from yquant.datasrc import (
     LocalDataRepo,
     StooqDailyBarSource,
     YFinanceDailyBarSource,
+    check_daily_bar_freshness,
+    write_report_artifact,
 )
 from yquant.datasrc.bars import normalize_symbols
 from yquant.datasrc.protocols import DailyBarSource
@@ -57,6 +59,50 @@ def build_parser() -> argparse.ArgumentParser:
     )
     data_update.add_argument("--start", required=True, help="inclusive start date, YYYY-MM-DD")
     data_update.add_argument("--end", required=True, help="inclusive end date, YYYY-MM-DD")
+    data_update.add_argument(
+        "--quality-dir",
+        type=Path,
+        default=None,
+        help="directory for update quality artifacts; defaults to data_dir/quality",
+    )
+
+    data_freshness = data_subparsers.add_parser(
+        "freshness",
+        help="check local daily-bar freshness for an expected session",
+    )
+    data_freshness.add_argument(
+        "--config",
+        type=Path,
+        default=Path("config.example.toml"),
+        help="config file to use",
+    )
+    data_freshness.add_argument(
+        "--symbols",
+        required=True,
+        help="comma-separated US tickers, e.g. AAPL,MSFT,SPY",
+    )
+    data_freshness.add_argument(
+        "--expected-date",
+        required=True,
+        help="expected bar date, YYYY-MM-DD",
+    )
+    data_freshness.add_argument(
+        "--deadline-utc",
+        default=None,
+        help="optional freshness deadline in UTC ISO format",
+    )
+    data_freshness.add_argument(
+        "--lookback-days",
+        type=int,
+        default=10,
+        help="days to search backward when reporting stale data",
+    )
+    data_freshness.add_argument(
+        "--quality-dir",
+        type=Path,
+        default=None,
+        help="directory for freshness artifacts; defaults to data_dir/quality",
+    )
 
     probe = subparsers.add_parser("probe", help="run WP0 assumption probes")
     probe_subparsers = probe.add_subparsers(dest="probe_name", required=True)
@@ -150,6 +196,8 @@ def main(argv: list[str] | None = None) -> int:
 def _run_data(args: argparse.Namespace) -> int:
     if args.data_command == "update":
         return _run_data_update(args)
+    if args.data_command == "freshness":
+        return _run_data_freshness(args)
     return 0
 
 
@@ -168,6 +216,11 @@ def _run_data_update(args: argparse.Namespace) -> int:
 
     repo = LocalDataRepo(cfg.runtime.parquet_dir)
     report = DailyBarsUpdater(repo, sources).update(symbols, start, end)
+    artifact_path = write_report_artifact(
+        report,
+        _quality_output_dir(cfg.runtime.data_dir, args.quality_dir),
+        kind="daily_bars_update",
+    )
     print("data_update: daily_bars")
     print(f"symbols: {', '.join(report.symbols)}")
     print(f"range: {report.start.isoformat()}..{report.end.isoformat()}")
@@ -180,14 +233,73 @@ def _run_data_update(args: argparse.Namespace) -> int:
     for manifest in report.manifests:
         print(f"manifest: {manifest.manifest_id}")
         print(f"storage: {manifest.storage_path}")
+    print(f"quality_artifact: {artifact_path}")
     if report.failed_symbols:
         print(f"failed_symbols: {', '.join(report.failed_symbols)}", file=sys.stderr)
         return 1
     return 0
 
 
+def _run_data_freshness(args: argparse.Namespace) -> int:
+    try:
+        cfg = load_config(args.config)
+        expected_date = date.fromisoformat(args.expected_date)
+        deadline = _parse_deadline_utc(args.deadline_utc)
+        symbols = normalize_symbols(_split_symbols(args.symbols))
+        if not symbols:
+            raise ValueError("--symbols must include at least one ticker")
+        if args.lookback_days < 0:
+            raise ValueError("--lookback-days must be non-negative")
+    except (ConfigError, ValueError) as exc:
+        print(f"data freshness error: {exc}", file=sys.stderr)
+        return 2
+
+    repo = LocalDataRepo(cfg.runtime.parquet_dir)
+    report = check_daily_bar_freshness(
+        repo,
+        symbols,
+        expected_date=expected_date,
+        deadline_utc=deadline,
+        lookback_days=args.lookback_days,
+    )
+    artifact_path = write_report_artifact(
+        report,
+        _quality_output_dir(cfg.runtime.data_dir, args.quality_dir),
+        kind="daily_bars_freshness",
+    )
+    print("data_freshness: daily_bars")
+    print(f"expected_date: {report.expected_date.isoformat()}")
+    if report.deadline_utc is not None:
+        print(f"deadline_utc: {report.deadline_utc.isoformat()}")
+    for item in report.items:
+        latest_date = item.latest_date.isoformat() if item.latest_date is not None else "none"
+        latest_asof = (
+            item.latest_asof_utc.isoformat() if item.latest_asof_utc is not None else "none"
+        )
+        print(
+            f"- {item.symbol}: {item.status} "
+            f"latest_date={latest_date} latest_asof_utc={latest_asof}"
+        )
+        print(f"  detail: {item.detail}")
+    print(f"quality_artifact: {artifact_path}")
+    return 0 if report.passed else 1
+
+
 def _split_symbols(raw: str) -> list[str]:
     return [symbol for chunk in raw.split(",") for symbol in [chunk.strip()] if symbol]
+
+
+def _parse_deadline_utc(raw: str | None) -> datetime | None:
+    if raw is None or not raw.strip():
+        return None
+    value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _quality_output_dir(data_dir: Path, override: Path | None) -> Path:
+    return override if override is not None else data_dir / "quality"
 
 
 def _daily_bar_sources(source_names: list[str]) -> list[DailyBarSource]:
