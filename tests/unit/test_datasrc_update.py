@@ -138,6 +138,32 @@ def test_reconcile_daily_bars_counts_missing_rows() -> None:
     assert report.passed
 
 
+def test_local_repo_can_filter_canonical_storage_by_source(tmp_path: Path) -> None:
+    repo = LocalDataRepo(tmp_path)
+    repo.write_daily_bars(pd.concat([
+        _bars("AAPL", "yfinance"),
+        _bars("AAPL", "stooq"),
+    ]))
+
+    yfinance = repo.get_daily_bars_storage(
+        ["AAPL"],
+        date(2024, 1, 1),
+        date(2024, 1, 31),
+        sources=["yfinance"],
+    )
+    stooq = repo.get_daily_bars_storage(
+        ["AAPL"],
+        date(2024, 1, 1),
+        date(2024, 1, 31),
+        sources=["stooq"],
+    )
+
+    assert set(yfinance["source"]) == {"yfinance"}
+    assert set(stooq["source"]) == {"stooq"}
+    assert len(yfinance) == 2
+    assert len(stooq) == 2
+
+
 def _bars(
     symbol: str,
     source: str,

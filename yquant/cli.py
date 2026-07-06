@@ -17,6 +17,8 @@ from yquant.datasrc import (
     StooqDailyBarSource,
     YFinanceDailyBarSource,
     check_daily_bar_freshness,
+    expected_daily_bar_deadline_utc,
+    reconcile_daily_bars,
     write_report_artifact,
 )
 from yquant.datasrc.bars import normalize_symbols
@@ -92,6 +94,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="optional freshness deadline in UTC ISO format",
     )
     data_freshness.add_argument(
+        "--use-calendar-deadline",
+        action="store_true",
+        help="derive deadline from the exchange close plus --minutes-after-close",
+    )
+    data_freshness.add_argument(
+        "--minutes-after-close",
+        type=int,
+        default=45,
+        help="minutes after exchange close for calendar-derived freshness deadline",
+    )
+    data_freshness.add_argument(
+        "--calendar",
+        default="NYSE",
+        help="pandas_market_calendars calendar name for deadline derivation",
+    )
+    data_freshness.add_argument(
         "--lookback-days",
         type=int,
         default=10,
@@ -102,6 +120,31 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="directory for freshness artifacts; defaults to data_dir/quality",
+    )
+
+    data_reconcile = data_subparsers.add_parser(
+        "reconcile",
+        help="compare persisted daily bars across two sources",
+    )
+    data_reconcile.add_argument(
+        "--config",
+        type=Path,
+        default=Path("config.example.toml"),
+        help="config file to use",
+    )
+    data_reconcile.add_argument("--symbols", required=True, help="comma-separated tickers")
+    data_reconcile.add_argument("--start", required=True, help="inclusive start date, YYYY-MM-DD")
+    data_reconcile.add_argument("--end", required=True, help="inclusive end date, YYYY-MM-DD")
+    data_reconcile.add_argument("--left-source", default="yfinance")
+    data_reconcile.add_argument("--right-source", default="stooq")
+    data_reconcile.add_argument("--price-column", default="close_raw")
+    data_reconcile.add_argument("--tolerance-bps", type=float, default=10.0)
+    data_reconcile.add_argument("--minimum-consistency-rate", type=float, default=0.995)
+    data_reconcile.add_argument(
+        "--quality-dir",
+        type=Path,
+        default=None,
+        help="directory for reconciliation artifacts; defaults to data_dir/quality",
     )
 
     probe = subparsers.add_parser("probe", help="run WP0 assumption probes")
@@ -198,6 +241,8 @@ def _run_data(args: argparse.Namespace) -> int:
         return _run_data_update(args)
     if args.data_command == "freshness":
         return _run_data_freshness(args)
+    if args.data_command == "reconcile":
+        return _run_data_reconcile(args)
     return 0
 
 
@@ -244,7 +289,7 @@ def _run_data_freshness(args: argparse.Namespace) -> int:
     try:
         cfg = load_config(args.config)
         expected_date = date.fromisoformat(args.expected_date)
-        deadline = _parse_deadline_utc(args.deadline_utc)
+        deadline = _freshness_deadline(args, expected_date)
         symbols = normalize_symbols(_split_symbols(args.symbols))
         if not symbols:
             raise ValueError("--symbols must include at least one ticker")
@@ -285,6 +330,63 @@ def _run_data_freshness(args: argparse.Namespace) -> int:
     return 0 if report.passed else 1
 
 
+def _run_data_reconcile(args: argparse.Namespace) -> int:
+    try:
+        cfg = load_config(args.config)
+        start = date.fromisoformat(args.start)
+        end = date.fromisoformat(args.end)
+        symbols = normalize_symbols(_split_symbols(args.symbols))
+        if not symbols:
+            raise ValueError("--symbols must include at least one ticker")
+    except (ConfigError, ValueError) as exc:
+        print(f"data reconcile error: {exc}", file=sys.stderr)
+        return 2
+
+    repo = LocalDataRepo(cfg.runtime.parquet_dir)
+    left = repo.get_daily_bars_storage(
+        symbols,
+        start,
+        end,
+        sources=[args.left_source],
+    )
+    right = repo.get_daily_bars_storage(
+        symbols,
+        start,
+        end,
+        sources=[args.right_source],
+    )
+    try:
+        report = reconcile_daily_bars(
+            left,
+            right,
+            left_source=args.left_source,
+            right_source=args.right_source,
+            price_column=args.price_column,
+            tolerance_bps=args.tolerance_bps,
+            minimum_consistency_rate=args.minimum_consistency_rate,
+        )
+    except ValueError as exc:
+        print(f"data reconcile error: {exc}", file=sys.stderr)
+        return 2
+
+    artifact_path = write_report_artifact(
+        report,
+        _quality_output_dir(cfg.runtime.data_dir, args.quality_dir),
+        kind="daily_bars_reconciliation",
+    )
+    print("data_reconcile: daily_bars")
+    print(f"symbols: {', '.join(symbols)}")
+    print(f"range: {start.isoformat()}..{end.isoformat()}")
+    print(f"sources: {report.left_source} vs {report.right_source}")
+    print(f"compared_rows: {report.compared_rows}")
+    print(f"missing_left_rows: {report.missing_left_rows}")
+    print(f"missing_right_rows: {report.missing_right_rows}")
+    print(f"mismatches: {len(report.mismatches)}")
+    print(f"consistency_rate: {report.consistency_rate:.6f}")
+    print(f"quality_artifact: {artifact_path}")
+    return 0 if report.passed else 1
+
+
 def _split_symbols(raw: str) -> list[str]:
     return [symbol for chunk in raw.split(",") for symbol in [chunk.strip()] if symbol]
 
@@ -296,6 +398,18 @@ def _parse_deadline_utc(raw: str | None) -> datetime | None:
     if value.tzinfo is None:
         value = value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _freshness_deadline(args: argparse.Namespace, expected_date: date) -> datetime | None:
+    if args.deadline_utc and args.use_calendar_deadline:
+        raise ValueError("--deadline-utc and --use-calendar-deadline are mutually exclusive")
+    if args.use_calendar_deadline:
+        return expected_daily_bar_deadline_utc(
+            expected_date,
+            minutes_after_close=args.minutes_after_close,
+            calendar_name=args.calendar,
+        )
+    return _parse_deadline_utc(args.deadline_utc)
 
 
 def _quality_output_dir(data_dir: Path, override: Path | None) -> Path:

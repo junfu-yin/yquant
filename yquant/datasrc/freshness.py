@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import importlib
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import pandas as pd
 
@@ -72,6 +73,42 @@ def check_daily_bar_freshness(
         generated_at_utc=generated_at,
         items=items,
     )
+
+
+def expected_daily_bar_deadline_utc(
+    session_date: date,
+    *,
+    minutes_after_close: int = 45,
+    calendar_name: str = "NYSE",
+) -> datetime:
+    """Return the UTC freshness deadline for an exchange session."""
+
+    if minutes_after_close < 0:
+        raise ValueError("minutes_after_close must be non-negative")
+
+    try:
+        mcal = importlib.import_module("pandas_market_calendars")
+    except ModuleNotFoundError as exc:
+        raise ValueError(
+            "pandas_market_calendars is required for calendar-derived deadlines"
+        ) from exc
+    calendar = mcal.get_calendar(calendar_name)
+    schedule = cast(
+        pd.DataFrame,
+        calendar.schedule(
+            start_date=session_date.isoformat(),
+            end_date=session_date.isoformat(),
+        ),
+    )
+    if schedule.empty:
+        raise ValueError(f"{session_date.isoformat()} is not a {calendar_name} session")
+
+    close_value = cast(Any, schedule.iloc[0]["market_close"])
+    close_utc = pd.Timestamp(close_value)
+    if close_utc.tzinfo is None:
+        close_utc = close_utc.tz_localize(UTC)
+    close_dt = cast(datetime, close_utc.to_pydatetime()).astimezone(UTC)
+    return close_dt + timedelta(minutes=minutes_after_close)
 
 
 def _freshness_item(

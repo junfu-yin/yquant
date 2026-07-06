@@ -74,6 +74,30 @@ class LocalDataRepo:
         mask = storage["symbol"].astype(str).isin(wanted) & (dates >= start) & (dates <= end)
         return repo_view(storage.loc[mask].copy(), adjust)
 
+    def get_daily_bars_storage(
+        self,
+        symbols: list[str],
+        start: date,
+        end: date,
+        *,
+        sources: list[str] | None = None,
+    ) -> pd.DataFrame:
+        """Return canonical storage rows, optionally filtered by source."""
+
+        if end < start:
+            raise ValueError("end must be on or after start")
+        wanted = set(normalize_symbols(symbols))
+        storage = self._read_daily_bars_storage()
+        if storage.empty or not wanted:
+            return storage
+
+        dates = pd.to_datetime(storage["date"]).dt.date
+        mask = storage["symbol"].astype(str).isin(wanted) & (dates >= start) & (dates <= end)
+        if sources is not None:
+            wanted_sources = {source.strip().lower() for source in sources if source.strip()}
+            mask &= storage["source"].astype(str).isin(wanted_sources)
+        return canonicalize_daily_bars(storage.loc[mask].copy())
+
     def get_universe(
         self,
         on_date: date,

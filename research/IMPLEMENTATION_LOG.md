@@ -237,3 +237,47 @@ Remaining implementation debt:
   deadline calculation is still future work.
 - No APScheduler job, retry/backoff, persisted ledger event, or alerting path
   yet.
+
+## 2026-07-06 - M1 Reconciliation CLI and Calendar Freshness Deadline
+
+Baseline:
+- Head commit before this pass: `7c709db`.
+- Goal from the staged implementation plan: turn reconciliation and freshness
+  SLA checks into auditable operator commands with tests and local artifacts.
+
+Completed changes:
+- Added `LocalDataRepo.get_daily_bars_storage(...)` so quality jobs can read
+  canonical stored rows filtered by source without changing the business-facing
+  `DataRepo.get_bars(...)` protocol.
+- Added `yquant data reconcile`, which compares persisted daily bars across two
+  sources, prints row/mismatch/consistency statistics, and writes a
+  `daily_bars_reconciliation` JSON artifact.
+- Added `expected_daily_bar_deadline_utc(...)`, deriving a freshness deadline
+  from a `pandas_market_calendars` exchange close plus a configurable minute
+  offset. `data freshness --use-calendar-deadline` uses this path.
+- Calendar-derived deadlines fail with a clear error if
+  `pandas_market_calendars` is unavailable, instead of crashing with an import
+  traceback.
+- Added execution-level CLI test coverage for `data reconcile` using a temporary
+  config, temporary Parquet repo, and generated quality artifact.
+
+Reasoning:
+- Reconciliation must be an artifact-producing operation, not just an in-memory
+  helper, because P3 acceptance depends on leaving evidence behind.
+- The freshness SLA belongs to the exchange calendar, not a hardcoded UTC hour.
+  Keeping the calendar dependency dynamic preserves testability and makes the
+  missing-dependency failure explicit.
+
+Verification:
+- `python -m pytest`: 115 passed.
+- `python -m ruff check .`: passed.
+- `python -m mypy yquant tests`: passed.
+- `python -m yquant data reconcile --help`: passed.
+- `python -m yquant data freshness --help`: passed.
+
+Remaining implementation debt:
+- Reconciliation currently reads already-persisted source rows. A sampled live
+  dual-fetch job for P3 still needs orchestration.
+- No APScheduler job, retry/backoff, persisted ledger event, or alerting path
+  yet.
+- Macro/index series still need their own storage schema and update path.
