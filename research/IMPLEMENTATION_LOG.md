@@ -151,3 +151,46 @@ Remaining implementation debt:
   survivorship-safe historical constituent database.
 - Macro series, EDGAR documents, SQLite ledger tables, and replay/as-of CLI are
   still future work.
+
+## 2026-07-06 - M1 Daily-Bar Update and Reconciliation Skeleton
+
+Baseline:
+- Head commit before this pass: `4e2a28d`.
+- Goal from the staged implementation plan: make the daily-bar store usable by
+  an operational update path while keeping all network behavior outside unit
+  tests.
+
+Completed changes:
+- Added `DailyBarsUpdater`, which takes an ordered list of daily-bar sources,
+  fetches each symbol, validates canonical quality, falls back to the next
+  source on fetch/empty/quality failure, and writes accepted bars to
+  `LocalDataRepo`.
+- Added source attempt reporting so every symbol/source path records success,
+  failure, empty result, or quality failure with row counts and error detail.
+- Added cross-source reconciliation for canonical daily bars, comparing raw
+  close values by `symbol/date`, reporting missing rows, mismatches in bps, and
+  an explicit consistency rate.
+- Added `yquant data update` as a thin CLI entry point over config-driven
+  yfinance/Stooq source order and the configured Parquet directory.
+- Added offline tests for primary-source success, fallback after fetch failure,
+  fallback after quality failure, no-write all-failed behavior, reconciliation
+  mismatches, missing rows, and CLI parser/source construction.
+
+Reasoning:
+- The system needs source fallback before any real daily job is scheduled;
+  otherwise transient yfinance/Stooq issues would leak into strategy behavior.
+- Reconciliation is kept as a separate pure function so it can later run as a
+  sampled quality job without changing the normal update path.
+
+Verification:
+- `python -m pytest`: 103 passed.
+- `python -m ruff check .`: passed.
+- `python -m mypy yquant tests`: passed.
+- `python -m yquant data update --help`: passed.
+
+Remaining implementation debt:
+- `data update` is intentionally manual; no APScheduler job, trading-calendar
+  gating, or close-plus-45-minute freshness SLA yet.
+- Reconciliation is not yet persisted as a quality report artifact.
+- No retry/backoff policy; current fallback is source-order only.
+- No macro/index batch update path yet.

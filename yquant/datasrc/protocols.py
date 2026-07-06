@@ -9,13 +9,17 @@ if TYPE_CHECKING:
     import pandas as pd
 
 
-class DataSource(Protocol):
-    """Unified protocol implemented by every external data adapter."""
+class DailyBarSource(Protocol):
+    """Minimum protocol for sources that can feed M1 daily bars."""
 
     name: str
 
     def fetch_daily_bars(self, symbol: str, start: date, end: date) -> pd.DataFrame:
         """Fetch daily OHLCV bars for one symbol."""
+
+
+class DataSource(DailyBarSource, Protocol):
+    """Unified protocol implemented by every external data adapter."""
 
     def fetch_stock_list(self, include_delisted: bool = True) -> pd.DataFrame:
         """Fetch stock master data."""
@@ -28,8 +32,8 @@ class DataRepo(Protocol):
     """The single read entry point for business modules (03 §5.1).
 
     Business code (strategies, risk engine, backtest) only ever imports this
-    protocol, never a raw source. Concrete implementation (Parquet + SQLite)
-    lands with M1; strategies and the risk engine are written against the
+    protocol, never a raw source. ``LocalDataRepo`` is the first concrete M1
+    implementation; strategies and the risk engine are written against the
     protocol so they can be unit-tested with a synthetic repo.
     """
 

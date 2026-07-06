@@ -6,9 +6,19 @@ import argparse
 import os
 import subprocess
 import sys
+from collections.abc import Callable
+from datetime import date
 from pathlib import Path
 
 from yquant.config import ConfigError, load_config
+from yquant.datasrc import (
+    DailyBarsUpdater,
+    LocalDataRepo,
+    StooqDailyBarSource,
+    YFinanceDailyBarSource,
+)
+from yquant.datasrc.bars import normalize_symbols
+from yquant.datasrc.protocols import DailyBarSource
 from yquant.probes.calendar import run_calendar_probe
 from yquant.probes.edgar import run_edgar_probe
 from yquant.probes.models import CheckResult, ProbeRun, make_probe_run, utc_now_iso, write_probe_run
@@ -30,6 +40,23 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("config.example.toml"),
         help="config file to inspect",
     )
+
+    data = subparsers.add_parser("data", help="run M1 data jobs")
+    data_subparsers = data.add_subparsers(dest="data_command", required=True)
+    data_update = data_subparsers.add_parser("update", help="fetch and persist daily bars")
+    data_update.add_argument(
+        "--config",
+        type=Path,
+        default=Path("config.example.toml"),
+        help="config file to use",
+    )
+    data_update.add_argument(
+        "--symbols",
+        required=True,
+        help="comma-separated US tickers, e.g. AAPL,MSFT,SPY",
+    )
+    data_update.add_argument("--start", required=True, help="inclusive start date, YYYY-MM-DD")
+    data_update.add_argument("--end", required=True, help="inclusive end date, YYYY-MM-DD")
 
     probe = subparsers.add_parser("probe", help="run WP0 assumption probes")
     probe_subparsers = probe.add_subparsers(dest="probe_name", required=True)
@@ -111,11 +138,75 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "doctor":
         return _doctor(args.config)
+    if args.command == "data":
+        return _run_data(args)
     if args.command == "probe":
         return _run_probe(args)
 
     parser.print_help()
     return 0
+
+
+def _run_data(args: argparse.Namespace) -> int:
+    if args.data_command == "update":
+        return _run_data_update(args)
+    return 0
+
+
+def _run_data_update(args: argparse.Namespace) -> int:
+    try:
+        cfg = load_config(args.config)
+        start = date.fromisoformat(args.start)
+        end = date.fromisoformat(args.end)
+        symbols = normalize_symbols(_split_symbols(args.symbols))
+        if not symbols:
+            raise ValueError("--symbols must include at least one ticker")
+        sources = _daily_bar_sources([cfg.data.primary_source, *cfg.data.backup_sources])
+    except (ConfigError, ValueError) as exc:
+        print(f"data update error: {exc}", file=sys.stderr)
+        return 2
+
+    repo = LocalDataRepo(cfg.runtime.parquet_dir)
+    report = DailyBarsUpdater(repo, sources).update(symbols, start, end)
+    print("data_update: daily_bars")
+    print(f"symbols: {', '.join(report.symbols)}")
+    print(f"range: {report.start.isoformat()}..{report.end.isoformat()}")
+    for attempt in report.attempts:
+        print(f"- {attempt.symbol} {attempt.source}: {attempt.status} rows={attempt.row_count}")
+        if attempt.error:
+            print(f"  error: {attempt.error}")
+        for issue in attempt.quality_issues:
+            print(f"  quality: {issue}")
+    for manifest in report.manifests:
+        print(f"manifest: {manifest.manifest_id}")
+        print(f"storage: {manifest.storage_path}")
+    if report.failed_symbols:
+        print(f"failed_symbols: {', '.join(report.failed_symbols)}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _split_symbols(raw: str) -> list[str]:
+    return [symbol for chunk in raw.split(",") for symbol in [chunk.strip()] if symbol]
+
+
+def _daily_bar_sources(source_names: list[str]) -> list[DailyBarSource]:
+    factories: dict[str, Callable[[], DailyBarSource]] = {
+        "yfinance": YFinanceDailyBarSource,
+        "stooq": StooqDailyBarSource,
+    }
+    sources: list[DailyBarSource] = []
+    seen: set[str] = set()
+    for source_name in source_names:
+        normalized = source_name.strip().lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        factory = factories.get(normalized)
+        if factory is None:
+            raise ConfigError(f"unsupported daily-bar source: {source_name}")
+        sources.append(factory())
+    return sources
 
 
 def _run_probe(args: argparse.Namespace) -> int:

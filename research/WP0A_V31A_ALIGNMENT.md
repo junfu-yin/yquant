@@ -56,9 +56,12 @@ Done:
 - M1 daily-bar minimum foundation now has canonical raw/adjusted storage,
   yfinance/Stooq normalizers, Parquet-backed `LocalDataRepo`, manifest hashes,
   and quality checks.
+- M1 daily-bar updates now have a source-ordered updater, manual CLI entry, and
+  pure yfinance/Stooq reconciliation report logic.
 
 Not done:
 - Proposal rejects are not yet ledgered as `risk_event` rows.
 - Dynamic 2x gates (RiskOn, trend, VIX) are not wired yet.
-- M1 batch update/retry/cutover, dual-source reconciliation, survivorship-safe
-  universe membership, macro series, and replay/as-of CLI are still future work.
+- M1 scheduled update/retry/backoff, persisted reconciliation reports,
+  survivorship-safe universe membership, macro series, and replay/as-of CLI are
+  still future work.
