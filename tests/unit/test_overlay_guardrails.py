@@ -27,6 +27,15 @@ def test_system_core_signal_keeps_layer() -> None:
     )
 
 
+def test_2x_requests_are_overlay_even_when_systematic() -> None:
+    assert (
+        required_layer_for_request(
+            "core", instrument_kind="leveraged_2x_long", is_system_signal=True
+        )
+        == "overlay"
+    )
+
+
 def test_overlay_total_and_single_caps_block_even_with_high_confidence() -> None:
     violations = validate_overlay_request(
         symbol="NVDA",
@@ -79,4 +88,3 @@ def test_3x_and_inverse_are_rejected() -> None:
         "icebox_ticker",
         "inverse_not_allowed",
     }
-

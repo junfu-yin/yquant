@@ -71,7 +71,7 @@ def required_layer_for_request(
 ) -> Layer:
     """Return the layer a request must use under ADR-37."""
 
-    if not is_system_signal or instrument_kind in {"meme_stock", "discretionary"}:
+    if not is_system_signal or instrument_kind != "ordinary":
         return "overlay"
     return requested_layer
 

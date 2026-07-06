@@ -3,7 +3,12 @@ from datetime import date, datetime
 import pytest
 
 from yquant.discipline.checklist import ExecutionChecklist
-from yquant.discipline.proposals import build_proposals, suggested_shares
+from yquant.discipline.proposals import (
+    ProposalMetadata,
+    ProposalValidationError,
+    build_proposals,
+    suggested_shares,
+)
 from yquant.discipline.risk_rules import (
     DisciplineConfig,
     DisciplineState,
@@ -66,6 +71,8 @@ def test_checklist_incomplete_lists_unmet() -> None:
     checklist = ExecutionChecklist()
     assert not checklist.is_complete()
     assert "off_plan_reason_required" in checklist.unmet_items()
+    assert "within_position_and_layer_budget" in checklist.unmet_items()
+    assert "red_team_reviewed" in checklist.unmet_items()
 
 
 def test_checklist_off_plan_requires_reason() -> None:
@@ -73,8 +80,10 @@ def test_checklist_off_plan_requires_reason() -> None:
         triggered_by_rule=False,
         not_in_cooldown=True,
         within_single_name_cap=True,
+        within_layer_budget=True,
         drawdown_allows_add=True,
         red_flags_reviewed=True,
+        red_team_reviewed=True,
     )
     assert not checklist.is_complete()  # missing off_plan_reason
     checklist.off_plan_reason = "manual rebalance"
@@ -86,8 +95,10 @@ def test_checklist_complete_when_rule_triggered() -> None:
         triggered_by_rule=True,
         not_in_cooldown=True,
         within_single_name_cap=True,
+        within_layer_budget=True,
         drawdown_allows_add=True,
         red_flags_reviewed=True,
+        red_team_reviewed=True,
     )
     assert checklist.is_complete()
     assert checklist.to_json()["complete"] is True
@@ -114,32 +125,189 @@ def test_build_proposals_diffs_weights() -> None:
         portfolio_value=100_000.0,
         strategy="S-A",
         position_rule="single<=15%",
+        proposal_metadata={
+            "AAPL": ProposalMetadata(
+                invalidation_condition="AAPL below 10-month trend",
+                red_team_note="Momentum can reverse after crowded tech rallies.",
+            )
+        },
         now=datetime(2024, 6, 3, 9, 0),
     )
     assert len(proposals) == 1
     prop = proposals[0]
     assert prop.symbol == "AAPL"
     assert prop.side == "buy"
+    assert prop.layer == "satellite"
+    assert prop.invalidation_condition == "AAPL below 10-month trend"
+    assert prop.red_team_note.startswith("Momentum")
     assert prop.suggested_shares == 50  # 0.10 * 100k / 200
     assert prop.status == "pending"
 
 
-def test_build_proposals_hk_lot_size() -> None:
+def test_build_proposals_supports_explicit_lot_size_flooring() -> None:
     controlled = TargetPortfolio(
         as_of=date(2024, 6, 3),
-        weights={"0700.HK": 0.10},
-        layers={"0700.HK": "satellite"},
+        weights={"BRK.A": 0.10},
+        layers={"BRK.A": "satellite"},
         cash_weight=0.90,
     )
     proposals = build_proposals(
         controlled,
         current_weights={},
-        prices={"0700.HK": 350.0},
+        prices={"BRK.A": 350.0},
         portfolio_value=100_000.0,
         strategy="S-A",
         position_rule="single<=15%",
-        lot_sizes={"0700.HK": 100},
+        lot_sizes={"BRK.A": 100},
+        proposal_metadata={
+            "BRK.A": ProposalMetadata(
+                invalidation_condition="Thesis invalid if target leaves selected universe.",
+                red_team_note="Lot sizing can prevent small accounts from expressing this target.",
+            )
+        },
         now=datetime(2024, 6, 3, 9, 0),
     )
-    # 0.10 * 100k / 350 = 28.5 shares → floored to lot 100 → 0 shares.
+    # 0.10 * 100k / 350 = 28.5 shares -> floored to lot 100 -> 0 shares.
     assert proposals[0].suggested_shares == 0
+
+
+def test_build_proposals_requires_invalidation_condition() -> None:
+    controlled = TargetPortfolio(
+        as_of=date(2024, 6, 3),
+        weights={"AAPL": 0.05},
+        layers={"AAPL": "satellite"},
+        cash_weight=0.95,
+    )
+
+    with pytest.raises(ProposalValidationError, match="invalidation_condition"):
+        build_proposals(
+            controlled,
+            current_weights={},
+            prices={"AAPL": 200.0},
+            portfolio_value=100_000.0,
+            strategy="S-A",
+            position_rule="single<=15%",
+            proposal_metadata={
+                "AAPL": ProposalMetadata(
+                    invalidation_condition=" ",
+                    red_team_note="Counter-thesis present.",
+                )
+            },
+        )
+
+
+def test_build_proposals_requires_red_team_note() -> None:
+    controlled = TargetPortfolio(
+        as_of=date(2024, 6, 3),
+        weights={"AAPL": 0.05},
+        layers={"AAPL": "satellite"},
+        cash_weight=0.95,
+    )
+
+    with pytest.raises(ProposalValidationError, match="red_team_note"):
+        build_proposals(
+            controlled,
+            current_weights={},
+            prices={"AAPL": 200.0},
+            portfolio_value=100_000.0,
+            strategy="S-A",
+            position_rule="single<=15%",
+            proposal_metadata={
+                "AAPL": ProposalMetadata(
+                    invalidation_condition="Signal leaves selected universe.",
+                    red_team_note=" ",
+                )
+            },
+        )
+
+
+def test_build_proposals_rejects_3x_icebox_buy() -> None:
+    controlled = TargetPortfolio(
+        as_of=date(2024, 6, 3),
+        weights={"TQQQ": 0.01},
+        layers={"TQQQ": "overlay"},
+        cash_weight=0.99,
+    )
+
+    with pytest.raises(ProposalValidationError) as exc:
+        build_proposals(
+            controlled,
+            current_weights={},
+            prices={"TQQQ": 60.0},
+            portfolio_value=100_000.0,
+            strategy="manual",
+            position_rule="overlay<=10%",
+            proposal_metadata={
+                "TQQQ": ProposalMetadata(
+                    invalidation_condition="3x thesis expires at close.",
+                    red_team_note="3x is in icebox and path-dependent.",
+                    instrument_kind="leveraged_3x",
+                    is_system_signal=False,
+                    requested_layer="overlay",
+                )
+            },
+        )
+
+    rules = {violation.rule for violation in exc.value.violations}
+    assert rules == {"icebox_ticker", "leveraged_3x_not_allowed"}
+
+
+def test_build_proposals_rejects_2x_single_cap_breach() -> None:
+    controlled = TargetPortfolio(
+        as_of=date(2024, 6, 3),
+        weights={"SSO": 0.04},
+        layers={"SSO": "core"},
+        cash_weight=0.96,
+    )
+
+    with pytest.raises(ProposalValidationError) as exc:
+        build_proposals(
+            controlled,
+            current_weights={},
+            prices={"SSO": 80.0},
+            portfolio_value=100_000.0,
+            strategy="overlay-2x",
+            position_rule="2x<=5%, single<=3%",
+            proposal_metadata={
+                "SSO": ProposalMetadata(
+                    invalidation_condition="Exit if state leaves RiskOn.",
+                    red_team_note="2x daily reset can decay in choppy markets.",
+                    instrument_kind="leveraged_2x_long",
+                    is_system_signal=True,
+                    requested_layer="core",
+                )
+            },
+        )
+
+    assert {violation.rule for violation in exc.value.violations} == {
+        "leveraged_2x_single_cap"
+    }
+
+
+def test_build_proposals_routes_meme_stock_to_overlay() -> None:
+    controlled = TargetPortfolio(
+        as_of=date(2024, 6, 3),
+        weights={"GME": 0.03},
+        layers={"GME": "satellite"},
+        cash_weight=0.97,
+    )
+    proposals = build_proposals(
+        controlled,
+        current_weights={},
+        prices={"GME": 25.0},
+        portfolio_value=100_000.0,
+        strategy="manual",
+        position_rule="overlay<=10%",
+        proposal_metadata={
+            "GME": ProposalMetadata(
+                invalidation_condition="Exit if social-volume spike fades for 2 sessions.",
+                red_team_note="Meme flows reverse violently and are not a system signal.",
+                instrument_kind="meme_stock",
+                is_system_signal=False,
+                requested_layer="satellite",
+            )
+        },
+    )
+
+    assert proposals[0].layer == "overlay"
+    assert proposals[0].instrument_kind == "meme_stock"

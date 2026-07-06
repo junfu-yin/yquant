@@ -51,13 +51,40 @@ def test_trade_proposal_schema() -> None:
         strategy="S-A",
         symbol="AAPL",
         side="buy",
+        layer="satellite",
+        instrument_kind="ordinary",
+        is_system_signal=True,
         target_weight=0.05,
         suggested_shares=100,
         position_rule="single<=15%",
+        invalidation_condition="Signal leaves selected universe.",
+        red_team_note="Single-factor momentum can reverse abruptly.",
         reason="strategy rule",
         related_events=["e1"],
         status="pending",
     )
 
     assert proposal.status == "pending"
+
+
+def test_trade_proposal_requires_invalidation_and_red_team() -> None:
+    with pytest.raises(ValidationError):
+        TradeProposal(
+            id="p1",
+            created_at=datetime(2026, 7, 5, 9, 0, tzinfo=UTC),
+            strategy="manual",
+            symbol="GME",
+            side="buy",
+            layer="overlay",
+            instrument_kind="meme_stock",
+            is_system_signal=False,
+            target_weight=0.03,
+            suggested_shares=100,
+            position_rule="overlay<=10%",
+            invalidation_condition=" ",
+            red_team_note=" ",
+            reason="manual opportunity",
+            related_events=[],
+            status="pending",
+        )
 

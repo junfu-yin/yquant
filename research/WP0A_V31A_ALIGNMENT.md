@@ -48,10 +48,11 @@ Done:
 - Active runtime config and CLI probe paths match the v3.1a execution domain.
 - Overlay/icebox guardrails exist as tested pure logic.
 - The full local quality baseline is green.
+- M5 proposal creation now requires invalidation/red-team metadata and enforces
+  static Overlay/2x/3x/icebox guardrails.
 
 Not done:
 - Legacy HK/AkShare/HKEX code still exists in inactive modules and tests.
-- Proposal schemas do not yet require `invalidation_condition` and
-  `red_team_note`.
-- The 6-item v3.1a checklist is not implemented yet.
+- Proposal rejects are not yet ledgered as `risk_event` rows.
+- Dynamic 2x gates (RiskOn, trend, VIX) are not wired yet.
 - M1 DataRepo, manifest, and storage are still future work.

@@ -48,6 +48,38 @@ Remaining implementation debt:
   on the active config/CLI path. They should be either deleted or moved behind
   an explicit legacy/icebox boundary in the next cleanup pass.
 
+## 2026-07-06 - M5 Proposal Guardrail Integration
+
+Baseline:
+- Head commit before this pass: `c18ea46`.
+- Goal from the staged implementation plan: upgrade M5 proposal/checklist so
+  v3.1a guardrails become an actual proposal gate.
+
+Completed changes:
+- `TradeProposal` now records layer, instrument kind, system-signal flag,
+  machine-readable invalidation condition, and red-team note.
+- Proposal creation now requires per-symbol `ProposalMetadata`; missing
+  invalidation or red-team fields fail before a proposal is emitted.
+- Execution checklist now represents the six v3.1a gates, including layer-budget
+  compliance and red-team review.
+- Overlay guardrails are wired into proposal creation for buy proposals.
+- 2x, 3x, inverse, meme-stock, and discretionary requests are routed to Overlay;
+  ordinary systematic core/satellite requests keep their layer.
+- Added proposal-level tests for 3x/icebox rejection, 2x single-cap rejection,
+  and meme-stock Overlay routing.
+
+Reasoning:
+- A rule that exists only as a helper can be bypassed by UI or strategy code.
+  The proposal layer is the first durable decision object, so it must be the
+  first hard gate.
+
+Remaining implementation debt:
+- Proposal rejects are not yet persisted as `risk_event` ledger rows because the
+  ledger does not exist yet.
+- Checklist state is still a pure object; UI and journal integration come later.
+- State-machine gates such as RiskOn/VIX/trend for 2x are not wired yet. This
+  pass enforces static budget/instrument gates only.
+
 Non-goals:
 - No full M1 data repository.
 - No UI.
