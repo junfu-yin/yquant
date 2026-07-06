@@ -8,10 +8,15 @@ import pytest
 from yquant.config import load_config
 from yquant.datasrc.freshness import DailyBarFreshnessItem, DailyBarFreshnessReport
 from yquant.datasrc.reconcile import ReconciliationMismatch, ReconciliationReport
+from yquant.datasrc.reconcile_live import (
+    SampledLiveReconciliationReport,
+    SourceFetchOutcome,
+)
 from yquant.notify import (
     AlertMessage,
     FeishuNotifier,
     freshness_alert,
+    live_reconcile_alert,
     notifier_from_env,
     reconcile_alert,
 )
@@ -83,6 +88,59 @@ def test_reconcile_alert_reports_consistency() -> None:
     assert message is not None
     assert "below threshold" in message.title
     assert "consistency_rate" in message.text
+
+
+def _live_report(*, failed: bool) -> SampledLiveReconciliationReport:
+    reconciliation = _reconcile_report(passed=True)
+    left = (SourceFetchOutcome("AAPL", "yfinance", "failed"),) if failed else ()
+    return SampledLiveReconciliationReport(
+        dataset="daily_bars",
+        start=date(2024, 1, 2),
+        end=date(2024, 1, 3),
+        universe_size=1,
+        sample_size=1,
+        seed=1,
+        sampled_symbols=("AAPL",),
+        left_fetches=left,
+        right_fetches=(),
+        reconciliation=reconciliation,
+    )
+
+
+def test_live_reconcile_alert_is_none_when_passing() -> None:
+    assert live_reconcile_alert(_live_report(failed=False)) is None
+
+
+def test_live_reconcile_alert_reports_fetch_failures() -> None:
+    message = live_reconcile_alert(_live_report(failed=True))
+    assert message is not None
+    assert "left_fetch_failures" in message.text
+
+
+def test_requests_transport_posts_and_raises_for_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+    import types
+
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    class _Resp:
+        def raise_for_status(self) -> None:
+            return None
+
+    def _post(url: str, json: dict[str, Any], timeout: int) -> _Resp:
+        calls.append((url, json))
+        return _Resp()
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.post = _post  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    notifier = FeishuNotifier("https://example.test/hook")
+    notifier.send(AlertMessage(title="T", text="b"))
+
+    assert calls[0][0] == "https://example.test/hook"
 
 
 def test_feishu_notifier_posts_text_payload() -> None:

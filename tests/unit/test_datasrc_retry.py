@@ -49,6 +49,43 @@ def test_run_with_retry_succeeds_after_transient_failures() -> None:
     assert slept == [1.0, 2.0]
 
 
+def test_on_retry_callback_receives_attempt_and_delay() -> None:
+    events: list[tuple[int, float]] = []
+
+    def flaky() -> str:
+        if len(events) < 1:
+            raise RuntimeError("once")
+        return "ok"
+
+    run_with_retry(
+        flaky,
+        RetryPolicy(max_attempts=3, base_delay_seconds=2.0),
+        sleep=lambda _: None,
+        on_retry=lambda attempt, err, delay: events.append((attempt, delay)),
+    )
+
+    assert events == [(1, 2.0)]
+
+
+def test_zero_delay_policy_does_not_sleep() -> None:
+    slept: list[float] = []
+    calls = {"n": 0}
+
+    def flaky() -> str:
+        calls["n"] += 1
+        if calls["n"] < 2:
+            raise RuntimeError("x")
+        return "ok"
+
+    run_with_retry(
+        flaky,
+        RetryPolicy(max_attempts=2, base_delay_seconds=0.0),
+        sleep=slept.append,
+    )
+
+    assert slept == []  # zero delay -> no sleep call
+
+
 def test_run_with_retry_reraises_after_exhausting_attempts() -> None:
     slept: list[float] = []
 

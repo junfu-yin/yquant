@@ -54,6 +54,35 @@ def test_normalize_yfinance_macro_uses_close() -> None:
     assert out["value"].iloc[0] == 12.5
 
 
+def test_yfinance_macro_source_fetches_via_mocked_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+    import types
+
+    from yquant.datasrc.macro import YFinanceMacroSource
+
+    def _download(
+        series_id: str, start: str, end: str, auto_adjust: bool, progress: bool
+    ) -> pd.DataFrame:
+        return pd.DataFrame(
+            {"Open": [10.0], "Close": [12.5], "Volume": [0]},
+            index=pd.DatetimeIndex(pd.to_datetime(["2024-01-02"]), name="Date"),
+        )
+
+    fake_yf = types.ModuleType("yfinance")
+    fake_yf.download = _download  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "yfinance", fake_yf)
+
+    out = YFinanceMacroSource().fetch_series("^VIX", date(2024, 1, 2), date(2024, 1, 3))
+    assert out["series_id"].iloc[0] == "^VIX"
+    assert out["value"].iloc[0] == 12.5
+
+
+def test_normalize_empty_macro_returns_empty() -> None:
+    assert normalize_yfinance_macro_series(pd.DataFrame(), "^VIX").empty
+
+
 def test_macro_updater_persists_and_reports(tmp_path: Path) -> None:
     source = _FakeMacroSource(
         "yfinance",
