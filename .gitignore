@@ -12,3 +12,8 @@ data/
 .ruff_cache/
 .coverage
 htmlcov/
+
+# mutation testing artifacts
+mutants/
+.mutmut-cache/
+mutants.sqlite
