@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
+from yquant.risk.regime import RiskRegime
 from yquant.strategies.base import Layer
 
 InstrumentKind = Literal[
@@ -82,12 +83,30 @@ def validate_overlay_request(
     instrument_kind: InstrumentKind,
     exposure: OverlayExposure,
     config: OverlayGuardrailConfig | None = None,
+    risk_regime: RiskRegime | None = None,
 ) -> list[OverlayViolation]:
-    """Validate an Overlay expression against v3.1a hard limits."""
+    """Validate an Overlay expression against v3.1a hard limits.
+
+    When ``risk_regime`` is supplied, a 2x-long request is additionally gated on
+    ``risk_regime.risk_on``: leverage is refused in a risk-off backdrop. Omitting
+    ``risk_regime`` leaves the static caps unchanged (no dynamic gate).
+    """
 
     config = config or OverlayGuardrailConfig()
     ticker = symbol.upper()
     violations: list[OverlayViolation] = []
+
+    if (
+        instrument_kind == "leveraged_2x_long"
+        and risk_regime is not None
+        and not risk_regime.risk_on
+    ):
+        violations.append(
+            OverlayViolation(
+                rule="leveraged_2x_risk_off",
+                detail={"symbol": ticker, "kind": instrument_kind, "reason": risk_regime.reason},
+            )
+        )
 
     if ticker in config.icebox_tickers:
         violations.append(

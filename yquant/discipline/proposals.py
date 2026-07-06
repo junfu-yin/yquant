@@ -23,6 +23,7 @@ from yquant.discipline.overlay_guardrails import (
     validate_overlay_request,
 )
 from yquant.discipline.schemas import TradeProposal
+from yquant.risk.regime import RiskRegime
 from yquant.strategies.base import Layer, TargetPortfolio
 
 
@@ -92,6 +93,7 @@ def build_proposals(
     related_events: dict[str, list[str]] | None = None,
     proposal_metadata: dict[str, ProposalMetadata] | None = None,
     overlay_config: OverlayGuardrailConfig | None = None,
+    risk_regime: RiskRegime | None = None,
 ) -> list[TradeProposal]:
     """Diff target vs current weights into buy/sell proposals.
 
@@ -135,6 +137,7 @@ def build_proposals(
                 symbol_weight_after=max(0.0, target),
                 leveraged_2x_weight_after=leveraged_2x_weight_after,
                 overlay_config=overlay_config,
+                risk_regime=risk_regime,
             )
         price = prices.get(symbol)
         if price is None:
@@ -249,6 +252,7 @@ def _validate_guardrails(
     symbol_weight_after: float,
     leveraged_2x_weight_after: float,
     overlay_config: OverlayGuardrailConfig | None,
+    risk_regime: RiskRegime | None,
 ) -> None:
     if layer != "overlay":
         return
@@ -261,6 +265,7 @@ def _validate_guardrails(
             leveraged_2x_weight_after=leveraged_2x_weight_after,
         ),
         config=overlay_config,
+        risk_regime=risk_regime,
     )
     if violations:
         rules = ", ".join(violation.rule for violation in violations)
