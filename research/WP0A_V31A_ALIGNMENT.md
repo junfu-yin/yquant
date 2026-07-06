@@ -63,9 +63,17 @@ Done:
   freshness can derive XNYS close-plus-45-minute deadlines when calendar support
   is installed.
 
+Done (2026-07-06 end-to-end M1 milestone, see `M1_MILESTONE_END_TO_END.md`):
+- Proposal rejects are ledgered as `risk_event` rows.
+- Dynamic 2x gate (RiskOn from trend + VIX) is wired into the overlay guardrails.
+- M1 scheduled update/freshness/reconcile jobs (APScheduler), retry/backoff,
+  sampled live reconciliation, survivorship-safe universe, macro series, and
+  as-of/replay reads are implemented, with a SQLite ledger, Feishu alerting, and
+  CI (ruff/mypy/pytest).
+
 Not done:
-- Proposal rejects are not yet ledgered as `risk_event` rows.
-- Dynamic 2x gates (RiskOn, trend, VIX) are not wired yet.
-- M1 scheduled update/retry/backoff, sampled live reconciliation jobs,
-  survivorship-safe universe membership, macro series, and replay/as-of CLI are
-  still future work.
+- Full bitemporal bar history (as-of currently excludes future-recorded rows but
+  cannot reconstruct overwritten versions).
+- Real security-master and macro source feeds behind adapters (master is
+  CSV-ingested; macro is yfinance-only).
+- Automatic risk-regime computation from stored macro inside the scheduler.
