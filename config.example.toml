@@ -42,3 +42,16 @@ cooldown_trading_days = 3
 [notification.feishu]
 webhook_env = "YQUANT_FEISHU_WEBHOOK"
 
+[schedule]
+# Unattended M1 daemon (optional). Cron strings are standard 5-field expressions
+# interpreted in runtime.timezone; leave a *_cron unset to disable that job.
+symbols = ["AAPL", "MSFT", "SPY"]
+history_days = 5
+update_cron = "30 17 * * 1-5"      # 17:30 New York on weekdays
+freshness_cron = "45 17 * * 1-5"   # after the close
+reconcile_cron = "0 18 * * 5"      # weekly Friday sampled live reconciliation
+reconcile_sample_size = 2
+reconcile_seed = 7
+minutes_after_close = 45
+calendar = "NYSE"
+

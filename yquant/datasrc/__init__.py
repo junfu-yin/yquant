@@ -16,6 +16,7 @@ from yquant.datasrc.reconcile_live import (
     sample_symbols,
 )
 from yquant.datasrc.repo import LocalDataRepo
+from yquant.datasrc.retry import RetryPolicy, run_with_retry
 from yquant.datasrc.update import DailyBarsUpdater, DailyBarsUpdateReport
 
 __all__ = [
@@ -25,6 +26,7 @@ __all__ = [
     "DataManifest",
     "LocalDataRepo",
     "ReconciliationReport",
+    "RetryPolicy",
     "SampledLiveReconciliationReport",
     "SourceFetchOutcome",
     "StooqDailyBarSource",
@@ -34,6 +36,7 @@ __all__ = [
     "read_report_artifact",
     "reconcile_daily_bars",
     "run_sampled_live_reconciliation",
+    "run_with_retry",
     "sample_symbols",
     "write_report_artifact",
 ]

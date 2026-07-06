@@ -180,6 +180,34 @@ def test_data_reconcile_live_parser_accepts_sampling_options() -> None:
     assert args.right_source == "stooq"
 
 
+def test_schedule_parser_accepts_run_once_job() -> None:
+    args = build_parser().parse_args(
+        [
+            "schedule",
+            "run-once",
+            "--job",
+            "reconcile-live",
+            "--on-date",
+            "2024-01-31",
+        ]
+    )
+
+    assert args.command == "schedule"
+    assert args.schedule_command == "run-once"
+    assert args.job == "reconcile-live"
+    assert args.on_date == "2024-01-31"
+
+
+def test_schedule_list_cli_reports_configured_jobs(capsys: pytest.CaptureFixture[str]) -> None:
+    args = build_parser().parse_args(["schedule", "list"])
+    exit_code = cli._run_schedule_list(args)
+
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "update_cron:" in out
+    assert "symbols:" in out
+
+
 def test_data_reconcile_live_cli_writes_quality_artifact(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

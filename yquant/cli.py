@@ -14,8 +14,6 @@ from yquant.config import ConfigError, load_config
 from yquant.datasrc import (
     DailyBarsUpdater,
     LocalDataRepo,
-    StooqDailyBarSource,
-    YFinanceDailyBarSource,
     check_daily_bar_freshness,
     expected_daily_bar_deadline_utc,
     reconcile_daily_bars,
@@ -24,11 +22,21 @@ from yquant.datasrc import (
 )
 from yquant.datasrc.bars import normalize_symbols
 from yquant.datasrc.protocols import DailyBarSource
+from yquant.datasrc.sources import build_daily_bar_source, build_daily_bar_sources
 from yquant.probes.calendar import run_calendar_probe
 from yquant.probes.edgar import run_edgar_probe
 from yquant.probes.models import CheckResult, ProbeRun, make_probe_run, utc_now_iso, write_probe_run
 from yquant.probes.stooq import run_stooq_probe
 from yquant.probes.yfinance_probe import run_yfinance_probe
+from yquant.scheduler.jobs import (
+    JobContext,
+    JobOutcome,
+    build_job_context,
+    build_scheduler,
+    run_freshness_job,
+    run_reconcile_live_job,
+    run_update_job,
+)
 from yquant.version import __version__
 
 
@@ -200,6 +208,43 @@ def build_parser() -> argparse.ArgumentParser:
         help="directory for live reconciliation artifacts; defaults to data_dir/quality",
     )
 
+    schedule = subparsers.add_parser("schedule", help="run unattended M1 jobs")
+    schedule_subparsers = schedule.add_subparsers(dest="schedule_command", required=True)
+
+    def add_schedule_config(sub: argparse.ArgumentParser) -> None:
+        sub.add_argument(
+            "--config",
+            type=Path,
+            default=Path("config.example.toml"),
+            help="config file to use",
+        )
+
+    schedule_list = schedule_subparsers.add_parser(
+        "list", help="show configured cron jobs and symbols"
+    )
+    add_schedule_config(schedule_list)
+
+    schedule_run_once = schedule_subparsers.add_parser(
+        "run-once", help="run one job immediately and record its outcome"
+    )
+    add_schedule_config(schedule_run_once)
+    schedule_run_once.add_argument(
+        "--job",
+        required=True,
+        choices=["update", "freshness", "reconcile-live"],
+        help="which job to run now",
+    )
+    schedule_run_once.add_argument(
+        "--on-date",
+        default=None,
+        help="session date, YYYY-MM-DD; defaults to today",
+    )
+
+    schedule_run = schedule_subparsers.add_parser(
+        "run", help="start the blocking scheduler daemon"
+    )
+    add_schedule_config(schedule_run)
+
     probe = subparsers.add_parser("probe", help="run WP0 assumption probes")
     probe_subparsers = probe.add_subparsers(dest="probe_name", required=True)
 
@@ -282,6 +327,8 @@ def main(argv: list[str] | None = None) -> int:
         return _doctor(args.config)
     if args.command == "data":
         return _run_data(args)
+    if args.command == "schedule":
+        return _run_schedule(args)
     if args.command == "probe":
         return _run_probe(args)
 
@@ -499,6 +546,80 @@ def _run_data_reconcile_live(args: argparse.Namespace) -> int:
     return 0 if report.passed else 1
 
 
+def _run_schedule(args: argparse.Namespace) -> int:
+    if args.schedule_command == "list":
+        return _run_schedule_list(args)
+    if args.schedule_command == "run-once":
+        return _run_schedule_run_once(args)
+    if args.schedule_command == "run":
+        return _run_schedule_run(args)
+    return 0
+
+
+def _run_schedule_list(args: argparse.Namespace) -> int:
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as exc:
+        print(f"schedule list error: {exc}", file=sys.stderr)
+        return 2
+
+    schedule = cfg.schedule
+    print("schedule: configured jobs")
+    print(f"timezone: {cfg.runtime.timezone}")
+    print(f"symbols: {', '.join(schedule.symbols) if schedule.symbols else '(none)'}")
+    print(f"history_days: {schedule.history_days}")
+    print(f"update_cron: {schedule.update_cron or '(disabled)'}")
+    print(f"freshness_cron: {schedule.freshness_cron or '(disabled)'}")
+    print(f"reconcile_cron: {schedule.reconcile_cron or '(disabled)'}")
+    print(f"reconcile_sample_size: {schedule.reconcile_sample_size}")
+    print(f"reconcile_seed: {schedule.reconcile_seed}")
+    return 0
+
+
+def _run_schedule_run_once(args: argparse.Namespace) -> int:
+    try:
+        cfg = load_config(args.config)
+        on_date = date.fromisoformat(args.on_date) if args.on_date else None
+    except (ConfigError, ValueError) as exc:
+        print(f"schedule run-once error: {exc}", file=sys.stderr)
+        return 2
+
+    ctx = build_job_context(cfg)
+    runners: dict[str, Callable[[JobContext], JobOutcome]] = {
+        "update": lambda c: run_update_job(c, on_date=on_date),
+        "freshness": lambda c: run_freshness_job(c, on_date=on_date),
+        "reconcile-live": lambda c: run_reconcile_live_job(c, on_date=on_date),
+    }
+    outcome = runners[args.job](ctx)
+    print(f"schedule_run_once: {outcome.job}")
+    print(f"status: {outcome.status}")
+    print(f"alerted: {outcome.alerted}")
+    for key, value in outcome.detail.items():
+        print(f"  {key}: {value}")
+    return 0 if outcome.ok else 1
+
+
+def _run_schedule_run(args: argparse.Namespace) -> int:
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as exc:
+        print(f"schedule run error: {exc}", file=sys.stderr)
+        return 2
+
+    ctx = build_job_context(cfg)
+    scheduler = build_scheduler(ctx)
+    jobs = scheduler.get_jobs()
+    if not jobs:
+        print("schedule run: no cron jobs configured; nothing to run", file=sys.stderr)
+        return 2
+    print(f"schedule run: starting {len(jobs)} job(s); press Ctrl+C to stop")
+    try:
+        scheduler.start()
+    except (KeyboardInterrupt, SystemExit):
+        scheduler.shutdown(wait=False)
+    return 0
+
+
 def _split_symbols(raw: str) -> list[str]:
     return [symbol for chunk in raw.split(",") for symbol in [chunk.strip()] if symbol]
 
@@ -529,26 +650,17 @@ def _quality_output_dir(data_dir: Path, override: Path | None) -> Path:
 
 
 def _daily_bar_source(source_name: str) -> DailyBarSource:
-    return _daily_bar_sources([source_name])[0]
+    try:
+        return build_daily_bar_source(source_name)
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
 
 
 def _daily_bar_sources(source_names: list[str]) -> list[DailyBarSource]:
-    factories: dict[str, Callable[[], DailyBarSource]] = {
-        "yfinance": YFinanceDailyBarSource,
-        "stooq": StooqDailyBarSource,
-    }
-    sources: list[DailyBarSource] = []
-    seen: set[str] = set()
-    for source_name in source_names:
-        normalized = source_name.strip().lower()
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        factory = factories.get(normalized)
-        if factory is None:
-            raise ConfigError(f"unsupported daily-bar source: {source_name}")
-        sources.append(factory())
-    return sources
+    try:
+        return build_daily_bar_sources(source_names)
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
 
 
 def _run_probe(args: argparse.Namespace) -> int:

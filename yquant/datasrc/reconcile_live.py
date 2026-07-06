@@ -23,6 +23,7 @@ from yquant.datasrc.bars import (
 )
 from yquant.datasrc.protocols import DailyBarSource, DataRepo
 from yquant.datasrc.reconcile import ReconciliationReport, reconcile_daily_bars
+from yquant.datasrc.retry import RetryPolicy, run_with_retry
 
 FetchStatus = Literal["success", "empty", "failed"]
 
@@ -106,6 +107,7 @@ def run_sampled_live_reconciliation(
     tolerance_bps: float = 10.0,
     minimum_consistency_rate: float = 0.995,
     request_pause_seconds: float = 0.0,
+    retry_policy: RetryPolicy | None = None,
 ) -> SampledLiveReconciliationReport:
     """Sample symbols, fetch both sources live, and reconcile the results.
 
@@ -134,8 +136,12 @@ def run_sampled_live_reconciliation(
     for index, symbol in enumerate(sampled):
         if index > 0 and request_pause_seconds > 0:
             time.sleep(request_pause_seconds)
-        left_outcome, left_frame = _live_fetch(left_source, symbol, start, end)
-        right_outcome, right_frame = _live_fetch(right_source, symbol, start, end)
+        left_outcome, left_frame = _live_fetch(
+            left_source, symbol, start, end, retry_policy=retry_policy
+        )
+        right_outcome, right_frame = _live_fetch(
+            right_source, symbol, start, end, retry_policy=retry_policy
+        )
         left_outcomes.append(left_outcome)
         right_outcomes.append(right_outcome)
         if left_frame is not None:
@@ -193,9 +199,17 @@ def _live_fetch(
     symbol: str,
     start: date,
     end: date,
+    *,
+    retry_policy: RetryPolicy | None = None,
 ) -> tuple[SourceFetchOutcome, pd.DataFrame | None]:
     try:
-        frame = source.fetch_daily_bars(symbol, start, end)
+        if retry_policy is not None:
+            frame = run_with_retry(
+                lambda: source.fetch_daily_bars(symbol, start, end),
+                retry_policy,
+            )
+        else:
+            frame = source.fetch_daily_bars(symbol, start, end)
     except Exception as exc:
         return (
             SourceFetchOutcome(
