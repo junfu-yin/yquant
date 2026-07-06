@@ -36,7 +36,7 @@ jobs:
         run: poetry run mypy yquant tests
 
       - name: Pytest
-        run: poetry run pytest --cov=yquant --cov-report=term-missing --cov-fail-under=88
+        run: poetry run pytest --cov=yquant --cov-report=term-missing --cov-fail-under=90
 
       - name: Mutation check (core logic)
         run: poetry run python scripts/mutation_check.py

@@ -99,11 +99,19 @@ Current M1 tests cover:
 - As-of reads excluding future-recorded rows and staggered arrivals.
 - Risk regime (trend/VIX), dynamic 2x gate, and ledgered proposal rejects.
 
+Testing layers (see `TESTING_STRATEGY.md`):
+- Unit + contract (mocked network) + property-based (Hypothesis) + CLI
+  end-to-end + adversarial traps.
+- A deterministic mutation check (`scripts/mutation_check.py`) on core logic;
+  7/7 mutants killed.
+
 Latest verification:
-- `python -m pytest`: 174 passed.
+- `python -m pytest`: 228 passed; coverage ~91% (CI floor 90%).
 - `python -m ruff check .`: passed.
 - `python -m mypy yquant tests`: passed.
-- CI (GitHub Actions) runs the same three checks on every push and PR.
+- `python scripts/mutation_check.py`: 7/7 killed.
+- CI (GitHub Actions) runs lint, types, tests+coverage, and the mutation check
+  on every push and PR.
 
 ## Remaining M1 Work
 
