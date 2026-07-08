@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 from typing import Literal
@@ -13,6 +15,7 @@ from yquant.datasrc.manifest import DataManifest
 from yquant.datasrc.protocols import DailyBarSource
 from yquant.datasrc.quality import QualityReport, check_daily_bars
 from yquant.datasrc.repo import LocalDataRepo
+from yquant.datasrc.retry import RetryPolicy, run_with_retry
 
 AttemptStatus = Literal["success", "empty", "failed", "quality_failed"]
 
@@ -51,11 +54,20 @@ class DailyBarsUpdateReport:
 class DailyBarsUpdater:
     """Fetch symbols through ordered sources, validate, and persist to LocalDataRepo."""
 
-    def __init__(self, repo: LocalDataRepo, sources: list[DailyBarSource]) -> None:
+    def __init__(
+        self,
+        repo: LocalDataRepo,
+        sources: list[DailyBarSource],
+        *,
+        retry_policy: RetryPolicy | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
         if not sources:
             raise ValueError("at least one daily-bar source is required")
         self.repo = repo
         self.sources = sources
+        self.retry_policy = retry_policy
+        self._sleep = sleep
 
     def update(self, symbols: list[str], start: date, end: date) -> DailyBarsUpdateReport:
         if end < start:
@@ -69,7 +81,14 @@ class DailyBarsUpdater:
         for symbol in normalized_symbols:
             accepted = False
             for source in self.sources:
-                attempt, frame = _fetch_and_validate(source, symbol, start, end)
+                attempt, frame = _fetch_and_validate(
+                    source,
+                    symbol,
+                    start,
+                    end,
+                    retry_policy=self.retry_policy,
+                    sleep=self._sleep,
+                )
                 attempts.append(attempt)
                 if attempt.status == "success" and frame is not None:
                     accepted_frames.append(frame)
@@ -99,9 +118,19 @@ def _fetch_and_validate(
     symbol: str,
     start: date,
     end: date,
+    *,
+    retry_policy: RetryPolicy | None = None,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> tuple[SourceAttempt, pd.DataFrame | None]:
     try:
-        frame = source.fetch_daily_bars(symbol, start, end)
+        if retry_policy is not None:
+            frame = run_with_retry(
+                lambda: source.fetch_daily_bars(symbol, start, end),
+                retry_policy,
+                sleep=sleep,
+            )
+        else:
+            frame = source.fetch_daily_bars(symbol, start, end)
     except Exception as exc:
         return (
             SourceAttempt(

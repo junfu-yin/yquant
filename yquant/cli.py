@@ -14,20 +14,29 @@ from yquant.config import ConfigError, load_config
 from yquant.datasrc import (
     DailyBarsUpdater,
     LocalDataRepo,
-    StooqDailyBarSource,
-    YFinanceDailyBarSource,
     check_daily_bar_freshness,
     expected_daily_bar_deadline_utc,
     reconcile_daily_bars,
+    run_sampled_live_reconciliation,
     write_report_artifact,
 )
 from yquant.datasrc.bars import normalize_symbols
 from yquant.datasrc.protocols import DailyBarSource
+from yquant.datasrc.sources import build_daily_bar_source, build_daily_bar_sources
 from yquant.probes.calendar import run_calendar_probe
 from yquant.probes.edgar import run_edgar_probe
 from yquant.probes.models import CheckResult, ProbeRun, make_probe_run, utc_now_iso, write_probe_run
 from yquant.probes.stooq import run_stooq_probe
 from yquant.probes.yfinance_probe import run_yfinance_probe
+from yquant.scheduler.jobs import (
+    JobContext,
+    JobOutcome,
+    build_job_context,
+    build_scheduler,
+    run_freshness_job,
+    run_reconcile_live_job,
+    run_update_job,
+)
 from yquant.version import __version__
 
 
@@ -147,6 +156,177 @@ def build_parser() -> argparse.ArgumentParser:
         help="directory for reconciliation artifacts; defaults to data_dir/quality",
     )
 
+    data_reconcile_live = data_subparsers.add_parser(
+        "reconcile-live",
+        help="sample symbols, fetch both sources live, and reconcile",
+    )
+    data_reconcile_live.add_argument(
+        "--config",
+        type=Path,
+        default=Path("config.example.toml"),
+        help="config file to use",
+    )
+    data_reconcile_live.add_argument(
+        "--symbols",
+        default=None,
+        help="comma-separated ticker pool to sample; defaults to the repo universe",
+    )
+    data_reconcile_live.add_argument("--start", required=True, help="inclusive start, YYYY-MM-DD")
+    data_reconcile_live.add_argument("--end", required=True, help="inclusive end, YYYY-MM-DD")
+    data_reconcile_live.add_argument(
+        "--on-date",
+        default=None,
+        help="universe as-of date when sampling from the repo; defaults to --end",
+    )
+    data_reconcile_live.add_argument(
+        "--sample-size",
+        type=int,
+        default=None,
+        help="number of symbols to sample; defaults to the whole pool",
+    )
+    data_reconcile_live.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="random seed for reproducible sampling evidence",
+    )
+    data_reconcile_live.add_argument("--left-source", default="yfinance")
+    data_reconcile_live.add_argument("--right-source", default="stooq")
+    data_reconcile_live.add_argument("--price-column", default="close_raw")
+    data_reconcile_live.add_argument("--tolerance-bps", type=float, default=10.0)
+    data_reconcile_live.add_argument("--minimum-consistency-rate", type=float, default=0.995)
+    data_reconcile_live.add_argument(
+        "--request-pause-seconds",
+        type=float,
+        default=0.0,
+        help="pause between symbols to stay within source rate limits",
+    )
+    data_reconcile_live.add_argument(
+        "--quality-dir",
+        type=Path,
+        default=None,
+        help="directory for live reconciliation artifacts; defaults to data_dir/quality",
+    )
+
+    data_load_securities = data_subparsers.add_parser(
+        "load-securities",
+        help="load a survivorship-safe security master from a CSV",
+    )
+    data_load_securities.add_argument(
+        "--config",
+        type=Path,
+        default=Path("config.example.toml"),
+        help="config file to use",
+    )
+    data_load_securities.add_argument(
+        "--csv",
+        required=True,
+        type=Path,
+        help="CSV with columns symbol,market,listing_date[,delisting_date]",
+    )
+
+    data_universe = data_subparsers.add_parser(
+        "universe",
+        help="print the point-in-time tradable universe on a date",
+    )
+    data_universe.add_argument(
+        "--config",
+        type=Path,
+        default=Path("config.example.toml"),
+        help="config file to use",
+    )
+    data_universe.add_argument(
+        "--on-date",
+        required=True,
+        help="as-of session date, YYYY-MM-DD",
+    )
+    data_universe.add_argument(
+        "--market",
+        default="all",
+        choices=["us", "all"],
+        help="restrict to a market or 'all'",
+    )
+
+    data_update_macro = data_subparsers.add_parser(
+        "update-macro",
+        help="fetch and persist macro/index level series",
+    )
+    data_update_macro.add_argument(
+        "--config",
+        type=Path,
+        default=Path("config.example.toml"),
+        help="config file to use",
+    )
+    data_update_macro.add_argument(
+        "--series",
+        required=True,
+        help="comma-separated series ids, e.g. ^GSPC,^VIX",
+    )
+    data_update_macro.add_argument("--start", required=True, help="inclusive start, YYYY-MM-DD")
+    data_update_macro.add_argument("--end", required=True, help="inclusive end, YYYY-MM-DD")
+
+    data_asof = data_subparsers.add_parser(
+        "asof",
+        help="read bars as known at a point in time (replay lookahead guard)",
+    )
+    data_asof.add_argument(
+        "--config",
+        type=Path,
+        default=Path("config.example.toml"),
+        help="config file to use",
+    )
+    data_asof.add_argument("--symbols", required=True, help="comma-separated tickers")
+    data_asof.add_argument("--start", required=True, help="inclusive start, YYYY-MM-DD")
+    data_asof.add_argument("--end", required=True, help="inclusive end, YYYY-MM-DD")
+    data_asof.add_argument(
+        "--as-of-utc",
+        required=True,
+        help="point-in-time cutoff in UTC ISO format, e.g. 2024-02-01T00:45:00Z",
+    )
+    data_asof.add_argument(
+        "--adjust",
+        default="adjusted",
+        choices=["none", "adjusted"],
+        help="price adjustment view",
+    )
+
+    schedule = subparsers.add_parser("schedule", help="run unattended M1 jobs")
+    schedule_subparsers = schedule.add_subparsers(dest="schedule_command", required=True)
+
+    def add_schedule_config(sub: argparse.ArgumentParser) -> None:
+        sub.add_argument(
+            "--config",
+            type=Path,
+            default=Path("config.example.toml"),
+            help="config file to use",
+        )
+
+    schedule_list = schedule_subparsers.add_parser(
+        "list", help="show configured cron jobs and symbols"
+    )
+    add_schedule_config(schedule_list)
+
+    schedule_run_once = schedule_subparsers.add_parser(
+        "run-once", help="run one job immediately and record its outcome"
+    )
+    add_schedule_config(schedule_run_once)
+    schedule_run_once.add_argument(
+        "--job",
+        required=True,
+        choices=["update", "freshness", "reconcile-live"],
+        help="which job to run now",
+    )
+    schedule_run_once.add_argument(
+        "--on-date",
+        default=None,
+        help="session date, YYYY-MM-DD; defaults to today",
+    )
+
+    schedule_run = schedule_subparsers.add_parser(
+        "run", help="start the blocking scheduler daemon"
+    )
+    add_schedule_config(schedule_run)
+
     probe = subparsers.add_parser("probe", help="run WP0 assumption probes")
     probe_subparsers = probe.add_subparsers(dest="probe_name", required=True)
 
@@ -229,6 +409,8 @@ def main(argv: list[str] | None = None) -> int:
         return _doctor(args.config)
     if args.command == "data":
         return _run_data(args)
+    if args.command == "schedule":
+        return _run_schedule(args)
     if args.command == "probe":
         return _run_probe(args)
 
@@ -243,6 +425,16 @@ def _run_data(args: argparse.Namespace) -> int:
         return _run_data_freshness(args)
     if args.data_command == "reconcile":
         return _run_data_reconcile(args)
+    if args.data_command == "reconcile-live":
+        return _run_data_reconcile_live(args)
+    if args.data_command == "load-securities":
+        return _run_data_load_securities(args)
+    if args.data_command == "universe":
+        return _run_data_universe(args)
+    if args.data_command == "update-macro":
+        return _run_data_update_macro(args)
+    if args.data_command == "asof":
+        return _run_data_asof(args)
     return 0
 
 
@@ -387,6 +579,240 @@ def _run_data_reconcile(args: argparse.Namespace) -> int:
     return 0 if report.passed else 1
 
 
+def _run_data_reconcile_live(args: argparse.Namespace) -> int:
+    try:
+        cfg = load_config(args.config)
+        start = date.fromisoformat(args.start)
+        end = date.fromisoformat(args.end)
+        on_date = date.fromisoformat(args.on_date) if args.on_date else None
+        symbols = normalize_symbols(_split_symbols(args.symbols)) if args.symbols else None
+        left_source = _daily_bar_source(args.left_source)
+        right_source = _daily_bar_source(args.right_source)
+    except (ConfigError, ValueError) as exc:
+        print(f"data reconcile-live error: {exc}", file=sys.stderr)
+        return 2
+
+    repo = LocalDataRepo(cfg.runtime.parquet_dir)
+    try:
+        report = run_sampled_live_reconciliation(
+            left_source,
+            right_source,
+            start=start,
+            end=end,
+            symbols=symbols,
+            repo=repo,
+            on_date=on_date,
+            sample_size=args.sample_size,
+            seed=args.seed,
+            price_column=args.price_column,
+            tolerance_bps=args.tolerance_bps,
+            minimum_consistency_rate=args.minimum_consistency_rate,
+            request_pause_seconds=args.request_pause_seconds,
+        )
+    except ValueError as exc:
+        print(f"data reconcile-live error: {exc}", file=sys.stderr)
+        return 2
+
+    artifact_path = write_report_artifact(
+        report,
+        _quality_output_dir(cfg.runtime.data_dir, args.quality_dir),
+        kind="daily_bars_live_reconciliation",
+    )
+    reconciliation = report.reconciliation
+    print("data_reconcile_live: daily_bars")
+    print(f"range: {start.isoformat()}..{end.isoformat()}")
+    print(f"sources: {reconciliation.left_source} vs {reconciliation.right_source}")
+    print(f"universe_size: {report.universe_size}")
+    print(f"sample_size: {report.sample_size} seed: {report.seed}")
+    print(f"sampled_symbols: {', '.join(report.sampled_symbols)}")
+    print(f"left_fetch_failures: {report.left_fetch_failures}")
+    print(f"right_fetch_failures: {report.right_fetch_failures}")
+    print(f"compared_rows: {reconciliation.compared_rows}")
+    print(f"missing_left_rows: {reconciliation.missing_left_rows}")
+    print(f"missing_right_rows: {reconciliation.missing_right_rows}")
+    print(f"mismatches: {len(reconciliation.mismatches)}")
+    print(f"consistency_rate: {report.consistency_rate:.6f}")
+    print(f"quality_artifact: {artifact_path}")
+    return 0 if report.passed else 1
+
+
+def _run_data_load_securities(args: argparse.Namespace) -> int:
+    import pandas as pd
+
+    try:
+        cfg = load_config(args.config)
+        if not args.csv.exists():
+            raise ValueError(f"security master CSV does not exist: {args.csv}")
+        frame = pd.read_csv(args.csv)
+    except (ConfigError, ValueError) as exc:
+        print(f"data load-securities error: {exc}", file=sys.stderr)
+        return 2
+
+    repo = LocalDataRepo(cfg.runtime.parquet_dir)
+    try:
+        master = repo.write_security_master(frame)
+    except ValueError as exc:
+        print(f"data load-securities error: {exc}", file=sys.stderr)
+        return 2
+    print("data_load_securities: security_master")
+    print(f"rows: {len(master)}")
+    print(f"storage: {repo.security_master_path}")
+    return 0
+
+
+def _run_data_universe(args: argparse.Namespace) -> int:
+    try:
+        cfg = load_config(args.config)
+        on_date = date.fromisoformat(args.on_date)
+    except (ConfigError, ValueError) as exc:
+        print(f"data universe error: {exc}", file=sys.stderr)
+        return 2
+
+    repo = LocalDataRepo(cfg.runtime.parquet_dir)
+    symbols = repo.get_universe(on_date, args.market)
+    source = "security_master" if not repo.get_security_master().empty else "bar_presence"
+    print("data_universe: tradable universe")
+    print(f"on_date: {on_date.isoformat()}")
+    print(f"market: {args.market}")
+    print(f"source: {source}")
+    print(f"count: {len(symbols)}")
+    print(f"symbols: {', '.join(symbols) if symbols else '(none)'}")
+    return 0
+
+
+def _run_data_asof(args: argparse.Namespace) -> int:
+    try:
+        cfg = load_config(args.config)
+        start = date.fromisoformat(args.start)
+        end = date.fromisoformat(args.end)
+        as_of = _parse_deadline_utc(args.as_of_utc)
+        if as_of is None:
+            raise ValueError("--as-of-utc must be a UTC ISO timestamp")
+        symbols = normalize_symbols(_split_symbols(args.symbols))
+        if not symbols:
+            raise ValueError("--symbols must include at least one ticker")
+    except (ConfigError, ValueError) as exc:
+        print(f"data asof error: {exc}", file=sys.stderr)
+        return 2
+
+    repo = LocalDataRepo(cfg.runtime.parquet_dir)
+    bars = repo.get_bars_asof(symbols, start, end, as_of, args.adjust)
+    print("data_asof: daily_bars")
+    print(f"as_of_utc: {as_of.isoformat()}")
+    print(f"range: {start.isoformat()}..{end.isoformat()}")
+    print(f"rows: {len(bars)}")
+    if not bars.empty:
+        latest = bars.groupby("symbol")["date"].max()
+        for symbol in symbols:
+            latest_date = latest.get(symbol)
+            shown = latest_date.isoformat() if latest_date is not None else "(none)"
+            print(f"- {symbol}: latest_visible_date={shown}")
+    return 0
+
+
+def _run_data_update_macro(args: argparse.Namespace) -> int:
+    from yquant.datasrc.macro import MacroUpdater, YFinanceMacroSource
+
+    try:
+        cfg = load_config(args.config)
+        start = date.fromisoformat(args.start)
+        end = date.fromisoformat(args.end)
+        series_ids = _split_symbols(args.series)
+        if not series_ids:
+            raise ValueError("--series must include at least one series id")
+    except (ConfigError, ValueError) as exc:
+        print(f"data update-macro error: {exc}", file=sys.stderr)
+        return 2
+
+    repo = LocalDataRepo(cfg.runtime.parquet_dir)
+    report = MacroUpdater(repo, YFinanceMacroSource()).update(series_ids, start, end)
+    print("data_update_macro: macro_series")
+    print(f"series: {', '.join(report.series_ids)}")
+    print(f"range: {report.start.isoformat()}..{report.end.isoformat()}")
+    for attempt in report.attempts:
+        print(f"- {attempt.series_id} {attempt.source}: {attempt.status} rows={attempt.row_count}")
+        if attempt.error:
+            print(f"  error: {attempt.error}")
+    if report.failed_series:
+        print(f"failed_series: {', '.join(report.failed_series)}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _run_schedule(args: argparse.Namespace) -> int:
+    if args.schedule_command == "list":
+        return _run_schedule_list(args)
+    if args.schedule_command == "run-once":
+        return _run_schedule_run_once(args)
+    if args.schedule_command == "run":
+        return _run_schedule_run(args)
+    return 0
+
+
+def _run_schedule_list(args: argparse.Namespace) -> int:
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as exc:
+        print(f"schedule list error: {exc}", file=sys.stderr)
+        return 2
+
+    schedule = cfg.schedule
+    print("schedule: configured jobs")
+    print(f"timezone: {cfg.runtime.timezone}")
+    print(f"symbols: {', '.join(schedule.symbols) if schedule.symbols else '(none)'}")
+    print(f"history_days: {schedule.history_days}")
+    print(f"update_cron: {schedule.update_cron or '(disabled)'}")
+    print(f"freshness_cron: {schedule.freshness_cron or '(disabled)'}")
+    print(f"reconcile_cron: {schedule.reconcile_cron or '(disabled)'}")
+    print(f"reconcile_sample_size: {schedule.reconcile_sample_size}")
+    print(f"reconcile_seed: {schedule.reconcile_seed}")
+    return 0
+
+
+def _run_schedule_run_once(args: argparse.Namespace) -> int:
+    try:
+        cfg = load_config(args.config)
+        on_date = date.fromisoformat(args.on_date) if args.on_date else None
+    except (ConfigError, ValueError) as exc:
+        print(f"schedule run-once error: {exc}", file=sys.stderr)
+        return 2
+
+    ctx = build_job_context(cfg)
+    runners: dict[str, Callable[[JobContext], JobOutcome]] = {
+        "update": lambda c: run_update_job(c, on_date=on_date),
+        "freshness": lambda c: run_freshness_job(c, on_date=on_date),
+        "reconcile-live": lambda c: run_reconcile_live_job(c, on_date=on_date),
+    }
+    outcome = runners[args.job](ctx)
+    print(f"schedule_run_once: {outcome.job}")
+    print(f"status: {outcome.status}")
+    print(f"alerted: {outcome.alerted}")
+    for key, value in outcome.detail.items():
+        print(f"  {key}: {value}")
+    return 0 if outcome.ok else 1
+
+
+def _run_schedule_run(args: argparse.Namespace) -> int:
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as exc:
+        print(f"schedule run error: {exc}", file=sys.stderr)
+        return 2
+
+    ctx = build_job_context(cfg)
+    scheduler = build_scheduler(ctx)
+    jobs = scheduler.get_jobs()
+    if not jobs:
+        print("schedule run: no cron jobs configured; nothing to run", file=sys.stderr)
+        return 2
+    print(f"schedule run: starting {len(jobs)} job(s); press Ctrl+C to stop")
+    try:
+        scheduler.start()
+    except (KeyboardInterrupt, SystemExit):
+        scheduler.shutdown(wait=False)
+    return 0
+
+
 def _split_symbols(raw: str) -> list[str]:
     return [symbol for chunk in raw.split(",") for symbol in [chunk.strip()] if symbol]
 
@@ -416,23 +842,18 @@ def _quality_output_dir(data_dir: Path, override: Path | None) -> Path:
     return override if override is not None else data_dir / "quality"
 
 
+def _daily_bar_source(source_name: str) -> DailyBarSource:
+    try:
+        return build_daily_bar_source(source_name)
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
 def _daily_bar_sources(source_names: list[str]) -> list[DailyBarSource]:
-    factories: dict[str, Callable[[], DailyBarSource]] = {
-        "yfinance": YFinanceDailyBarSource,
-        "stooq": StooqDailyBarSource,
-    }
-    sources: list[DailyBarSource] = []
-    seen: set[str] = set()
-    for source_name in source_names:
-        normalized = source_name.strip().lower()
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        factory = factories.get(normalized)
-        if factory is None:
-            raise ConfigError(f"unsupported daily-bar source: {source_name}")
-        sources.append(factory())
-    return sources
+    try:
+        return build_daily_bar_sources(source_names)
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
 
 
 def _run_probe(args: argparse.Namespace) -> int:

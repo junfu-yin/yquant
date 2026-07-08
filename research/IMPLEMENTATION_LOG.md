@@ -281,3 +281,107 @@ Remaining implementation debt:
 - No APScheduler job, retry/backoff, persisted ledger event, or alerting path
   yet.
 - Macro/index series still need their own storage schema and update path.
+
+## 2026-07-06 - Sampled Live Dual-Source Reconciliation Job
+
+Baseline:
+- Head commit before this pass: `aa06e73`.
+- Goal: close the P3-evidence gap noted above by fetching sampled symbols live
+  from both sources and reconciling the two live results, instead of only
+  comparing rows already persisted by the fallback-based updater.
+
+Completed changes:
+- Added `yquant/datasrc/reconcile_live.py`:
+  - `sample_symbols(pool, sample_size, seed)` normalizes the pool (upper-cased,
+    de-duplicated, sorted) before sampling, so a given seed selects the same
+    symbols regardless of input order — reproducible, auditable evidence.
+  - `run_sampled_live_reconciliation(...)` queries both sources for every
+    sampled symbol without fallback, records a per-source `SourceFetchOutcome`
+    (success/empty/failed) instead of short-circuiting, then feeds the combined
+    live frames into `reconcile_daily_bars`.
+  - `SampledLiveReconciliationReport` wraps the reconciliation with sampling
+    metadata (universe size, sample size, seed, sampled symbols) and per-source
+    fetch-failure counts; `passed` requires a clean reconciliation *and* no
+    fetch failures on either side.
+- Added `yquant data reconcile-live`, which samples from an explicit `--symbols`
+  pool (or the repo universe on `--on-date` when `--symbols` is omitted),
+  supports `--sample-size`/`--seed`/`--request-pause-seconds`, and writes a
+  `daily_bars_live_reconciliation` JSON artifact.
+- Hardened `reconcile_daily_bars` to return a zeroed report when both sides are
+  empty, instead of crashing inside the pandas/pyarrow merge — the common case
+  when every live fetch fails or is empty.
+
+Reasoning:
+- The updater deliberately stops at the first successful source, so it rarely
+  stores both sources for the same day; a dedicated both-source live fetch is
+  required to produce genuine cross-source evidence.
+- Comparison stays on `close_raw`: Stooq bars are unadjusted and yfinance is
+  stored with raw + adjustment factor, so raw-vs-raw is the correct
+  apples-to-apples comparison and avoids false mismatches from differing
+  corporate-action handling.
+- Seeded sampling and recorded metadata make each evidence run re-runnable.
+
+Verification:
+- `python -m pytest`: 125 passed.
+- `python -m ruff check .`: passed.
+- `python -m mypy yquant tests`: passed.
+- `python -m yquant data reconcile-live --help`: passed.
+- Synthetic happy-path run (fake sources, seed 7) sampled `AAPL, MSFT`, compared
+  6 rows, 0 mismatches, consistency 1.0, passed.
+- A real CLI run against yfinance/stooq from this restricted environment was
+  blocked by the network egress policy (Yahoo `CONNECT` denied, 403); the job
+  degraded gracefully — per-source fetch failures were recorded and an artifact
+  was still written. A genuine green artifact requires running where egress to
+  Yahoo/Stooq is permitted.
+
+Remaining implementation debt:
+- No APScheduler job, retry/backoff, persisted ledger event, or alerting path
+  yet; the live reconciliation is still a manual operator command.
+- Macro/index series still need their own storage schema and update path.
+
+## 2026-07-06 - End-to-end M1: CI, scheduler, correctness, and risk wiring
+
+Baseline:
+- Head before this pass: `aa06e73`.
+- Goal: take M1 from manual on-demand commands to an unattended, survivorship-
+  aware, risk-gated pipeline with CI. Delivered in four phases, each landed green
+  and pushed separately. Full detail in `M1_MILESTONE_END_TO_END.md`.
+
+Completed changes:
+- Phase 0 (`9b7fc40`): GitHub Actions CI running ruff + mypy + pytest on push/PR.
+- Phase 1 (`f928385`): SQLite ledger (`risk_events`/`job_runs`); pure retry/
+  backoff wired into the updater and live reconciliation; Feishu alerting with an
+  injectable transport; APScheduler jobs that ledger outcomes and alert on
+  failure, with an optional `[schedule]` config section and `schedule` CLI.
+- Phase 2 (`b3a954e`): security-master point-in-time universe (survivorship-safe,
+  bar-presence fallback); macro/index level series storage + `update-macro`;
+  as-of/replay reads (`get_bars_asof`) as a lookahead guard; `load-securities`,
+  `universe`, `update-macro`, and `asof` CLI commands.
+- Phase 3 (`0fd5998`): risk regime (`compute_risk_on` from trend + VIX); dynamic
+  2x-long gate in the overlay guardrails, threaded through `build_proposals`;
+  proposal rejections ledgered as `proposal_reject:*` risk_events.
+
+Reasoning:
+- Retry/backoff and a durable ledger had to exist before scheduling ran fetches
+  unattended, so failures are bounded and leave evidence.
+- Bar-presence universes are not survivorship-safe; a security master with
+  listing/delisting dates is the minimum to answer "what was tradable then".
+- The as-of read closes the most dangerous backtest leak (using data recorded
+  after the decision instant) even under single-version storage.
+- Leverage should be regime-conditional, not just cap-limited; the gate stays
+  backward compatible by doing nothing when no regime is supplied.
+
+Verification:
+- `python -m pytest`: 174 passed.
+- `python -m ruff check .`: passed.
+- `python -m mypy yquant tests`: passed.
+- CI green on the PR for each phase.
+- Live paths (update, reconcile-live, macro, real Feishu) remain blocked by the
+  sandbox egress policy; they are fake-tested and degrade gracefully. Run where
+  egress is open for real artifacts.
+
+Remaining implementation debt:
+- Bitemporal bar history for full as-of reconstruction.
+- Real security-master / macro source feeds behind adapters.
+- Automatic risk-regime computation from stored macro inside the scheduler.
+- Daemon retry evidence and alert de-duplication.

@@ -80,12 +80,32 @@ class NotificationConfig:
 
 
 @dataclass(frozen=True)
+class ScheduleConfig:
+    """Optional [schedule] section driving the unattended M1 daemon.
+
+    A ``*_cron`` set to ``None`` means that job is not scheduled. Cron strings
+    are standard 5-field expressions interpreted in the runtime timezone.
+    """
+
+    symbols: tuple[str, ...] = ()
+    history_days: int = 5
+    update_cron: str | None = None
+    freshness_cron: str | None = None
+    reconcile_cron: str | None = None
+    reconcile_sample_size: int | None = None
+    reconcile_seed: int | None = None
+    minutes_after_close: int = 45
+    calendar: str = "NYSE"
+
+
+@dataclass(frozen=True)
 class AppConfig:
     runtime: RuntimeConfig
     data: DataConfig
     llm: LLMConfig
     risk: RiskConfig
     notification: NotificationConfig
+    schedule: ScheduleConfig
 
 
 def load_config(path: str | Path = "config.example.toml") -> AppConfig:
@@ -102,6 +122,7 @@ def load_config(path: str | Path = "config.example.toml") -> AppConfig:
         llm = _llm_config(raw["llm"])
         risk = _risk_config(raw["risk"])
         notification = _notification_config(raw["notification"])
+        schedule = _schedule_config(raw.get("schedule"))
     except KeyError as exc:
         raise ConfigError(f"missing config section or key: {exc}") from exc
     except TypeError as exc:
@@ -113,6 +134,7 @@ def load_config(path: str | Path = "config.example.toml") -> AppConfig:
         llm=llm,
         risk=risk,
         notification=notification,
+        schedule=schedule,
     )
 
 
@@ -202,6 +224,48 @@ def _risk_config(raw: dict[str, Any]) -> RiskConfig:
 
 def _notification_config(raw: dict[str, Any]) -> NotificationConfig:
     return NotificationConfig(feishu=FeishuConfig(webhook_env=str(raw["feishu"]["webhook_env"])))
+
+
+def _schedule_config(raw: dict[str, Any] | None) -> ScheduleConfig:
+    if not raw:
+        return ScheduleConfig()
+
+    symbols = tuple(
+        str(item).strip().upper() for item in raw.get("symbols", ()) if str(item).strip()
+    )
+    history_days = int(raw.get("history_days", 5))
+    if history_days < 0:
+        raise ConfigError("schedule.history_days must be non-negative")
+
+    sample_size = raw.get("reconcile_sample_size")
+    if sample_size is not None:
+        sample_size = int(sample_size)
+        if sample_size <= 0:
+            raise ConfigError("schedule.reconcile_sample_size must be positive when set")
+    seed = raw.get("reconcile_seed")
+    seed = int(seed) if seed is not None else None
+    minutes_after_close = int(raw.get("minutes_after_close", 45))
+    if minutes_after_close < 0:
+        raise ConfigError("schedule.minutes_after_close must be non-negative")
+
+    return ScheduleConfig(
+        symbols=symbols,
+        history_days=history_days,
+        update_cron=_optional_str(raw.get("update_cron")),
+        freshness_cron=_optional_str(raw.get("freshness_cron")),
+        reconcile_cron=_optional_str(raw.get("reconcile_cron")),
+        reconcile_sample_size=sample_size,
+        reconcile_seed=seed,
+        minutes_after_close=minutes_after_close,
+        calendar=str(raw.get("calendar", "NYSE")),
+    )
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _require_ratio(name: str, value: float) -> None:

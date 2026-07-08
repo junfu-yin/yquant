@@ -9,7 +9,14 @@ from yquant.datasrc.freshness import (
 )
 from yquant.datasrc.manifest import DataManifest
 from yquant.datasrc.reconcile import ReconciliationReport, reconcile_daily_bars
+from yquant.datasrc.reconcile_live import (
+    SampledLiveReconciliationReport,
+    SourceFetchOutcome,
+    run_sampled_live_reconciliation,
+    sample_symbols,
+)
 from yquant.datasrc.repo import LocalDataRepo
+from yquant.datasrc.retry import RetryPolicy, run_with_retry
 from yquant.datasrc.update import DailyBarsUpdater, DailyBarsUpdateReport
 
 __all__ = [
@@ -19,11 +26,17 @@ __all__ = [
     "DataManifest",
     "LocalDataRepo",
     "ReconciliationReport",
+    "RetryPolicy",
+    "SampledLiveReconciliationReport",
+    "SourceFetchOutcome",
     "StooqDailyBarSource",
     "YFinanceDailyBarSource",
     "check_daily_bar_freshness",
     "expected_daily_bar_deadline_utc",
     "read_report_artifact",
     "reconcile_daily_bars",
+    "run_sampled_live_reconciliation",
+    "run_with_retry",
+    "sample_symbols",
     "write_report_artifact",
 ]

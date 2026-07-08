@@ -1,14 +1,17 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
+import yquant.cli as cli
 from yquant.cli import (
     _daily_bar_sources,
     _parse_deadline_utc,
     _run_data_reconcile,
+    _run_data_reconcile_live,
     _split_symbols,
     build_parser,
 )
@@ -150,6 +153,108 @@ def test_data_reconcile_cli_writes_quality_artifact(tmp_path: Path) -> None:
     payload = read_report_artifact(artifacts[0])
     assert payload["report"]["passed"] is True
     assert payload["report"]["compared_rows"] == 2
+
+
+def test_data_reconcile_live_parser_accepts_sampling_options() -> None:
+    args = build_parser().parse_args(
+        [
+            "data",
+            "reconcile-live",
+            "--symbols",
+            "aapl,msft,spy",
+            "--start",
+            "2024-01-01",
+            "--end",
+            "2024-01-31",
+            "--sample-size",
+            "2",
+            "--seed",
+            "13",
+        ]
+    )
+
+    assert args.data_command == "reconcile-live"
+    assert args.sample_size == 2
+    assert args.seed == 13
+    assert args.left_source == "yfinance"
+    assert args.right_source == "stooq"
+
+
+def test_schedule_parser_accepts_run_once_job() -> None:
+    args = build_parser().parse_args(
+        [
+            "schedule",
+            "run-once",
+            "--job",
+            "reconcile-live",
+            "--on-date",
+            "2024-01-31",
+        ]
+    )
+
+    assert args.command == "schedule"
+    assert args.schedule_command == "run-once"
+    assert args.job == "reconcile-live"
+    assert args.on_date == "2024-01-31"
+
+
+def test_schedule_list_cli_reports_configured_jobs(capsys: pytest.CaptureFixture[str]) -> None:
+    args = build_parser().parse_args(["schedule", "list"])
+    exit_code = cli._run_schedule_list(args)
+
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "update_cron:" in out
+    assert "symbols:" in out
+
+
+def test_data_reconcile_live_cli_writes_quality_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fakes = {
+        "yfinance": _FakeCliSource("yfinance", {"AAPL": _bars("AAPL", "yfinance")}),
+        "stooq": _FakeCliSource("stooq", {"AAPL": _bars("AAPL", "stooq")}),
+    }
+    monkeypatch.setattr(cli, "_daily_bar_source", lambda name: fakes[name])
+
+    config = _write_config(tmp_path)
+    quality_dir = tmp_path / "quality"
+    args = build_parser().parse_args(
+        [
+            "data",
+            "reconcile-live",
+            "--config",
+            str(config),
+            "--symbols",
+            "AAPL",
+            "--start",
+            "2024-01-02",
+            "--end",
+            "2024-01-03",
+            "--quality-dir",
+            str(quality_dir),
+        ]
+    )
+
+    exit_code = _run_data_reconcile_live(args)
+    artifacts = list(quality_dir.glob("*_daily_bars_live_reconciliation.json"))
+
+    assert exit_code == 0
+    assert len(artifacts) == 1
+    payload = read_report_artifact(artifacts[0])
+    assert payload["report"]["passed"] is True
+    assert payload["report"]["sampled_symbols"] == ["AAPL"]
+    assert payload["report"]["reconciliation"]["compared_rows"] == 2
+
+
+class _FakeCliSource:
+    def __init__(self, name: str, frames: dict[str, pd.DataFrame]) -> None:
+        self.name = name
+        self.frames = frames
+
+    def fetch_daily_bars(self, symbol: str, start: date, end: date) -> pd.DataFrame:
+        return self.frames.get(symbol, pd.DataFrame())
 
 
 def test_split_symbols_trims_empty_chunks() -> None:
