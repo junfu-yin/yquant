@@ -520,6 +520,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="optional path to write the JSON eval scorecard",
     )
 
+    macro = subparsers.add_parser(
+        "macro",
+        help="M9 macro radar: hawk/dove calibration + committee guardrails (03 §5.9)",
+    )
+    macro_subparsers = macro.add_subparsers(dest="macro_command", required=True)
+
+    macro_calibrate = macro_subparsers.add_parser(
+        "calibrate",
+        help="score the frozen 30-sentence hawk/dove calibration set (06 §6)",
+    )
+    macro_calibrate.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="optional path to write the JSON calibration report",
+    )
+
     ledger = subparsers.add_parser("ledger", help="inspect the decision-event ledger (07)")
     ledger_subparsers = ledger.add_subparsers(dest="ledger_command", required=True)
 
@@ -603,6 +620,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_paper(args)
     if args.command == "brief":
         return _run_brief(args)
+    if args.command == "macro":
+        return _run_macro(args)
     if args.command == "ledger":
         return _run_ledger(args)
 
@@ -1391,6 +1410,33 @@ def _run_brief_eval(args: argparse.Namespace) -> int:
         args.output.write_text(json.dumps(metrics.as_dict(), indent=2), encoding="utf-8")
         print(f"eval_artifact: {args.output}")
     return 0 if metrics.passed else 1
+
+
+def _run_macro(args: argparse.Namespace) -> int:
+    if args.macro_command == "calibrate":
+        return _run_macro_calibrate(args)
+    return 0
+
+
+def _run_macro_calibrate(args: argparse.Namespace) -> int:
+    import json
+
+    from yquant.macro import run_calibration
+
+    report = run_calibration()
+    print("macro calibrate: hawk/dove five-tier calibration set (03 §5.9, 06 §6)")
+    print(f"samples: {report.total} (balanced across five tiers)")
+    print(f"mean_abs_deviation: {report.mean_abs_deviation:.4f} (<0.5 tier)")
+    print(f"direction_accuracy: {report.direction_accuracy:.2%}")
+    print(f"within_one_tier: {report.within_one_tier:.2%}")
+    verdict = "PASS" if report.passed else "FAIL (recalibrate)"
+    print(f"calibration_verdict: {verdict}")
+
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(report.as_dict(), indent=2), encoding="utf-8")
+        print(f"calibration_artifact: {args.output}")
+    return 0 if report.passed else 1
 
 
 def _run_ledger(args: argparse.Namespace) -> int:

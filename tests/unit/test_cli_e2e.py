@@ -490,3 +490,19 @@ def test_brief_eval_cli_passes_and_writes_artifact(
     assert payload["total"] == 120
     assert payload["passed"] is True
 
+
+def test_macro_calibrate_cli_passes_and_writes_artifact(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import json
+
+    out_path = tmp_path / "macro_calibration.json"
+    code = main(["macro", "calibrate", "--output", str(out_path)])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "calibration_verdict: PASS" in out
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["total"] == 30
+    assert payload["passed"] is True
+
+
