@@ -15,7 +15,11 @@ from yquant.datasrc.bars import (
     normalize_symbols,
     repo_view,
 )
-from yquant.datasrc.macro import canonicalize_macro_series, empty_macro_series
+from yquant.datasrc.macro import (
+    canonicalize_macro_series,
+    empty_macro_series,
+    latest_macro_by_asof,
+)
 from yquant.datasrc.manifest import DataManifest, append_manifest, build_manifest, read_manifests
 from yquant.datasrc.quality import check_daily_bars
 from yquant.datasrc.security_master import (
@@ -178,7 +182,11 @@ class LocalDataRepo:
         start: date,
         end: date,
     ) -> pd.DataFrame:
-        """Return macro series rows for ``series_ids`` in inclusive ``[start, end]``."""
+        """Return the latest-known macro series rows in inclusive ``[start, end]``.
+
+        Bitemporal storage keeps every revision; the current view collapses to
+        the freshest ``asof`` per series/date/source.
+        """
 
         if end < start:
             raise ValueError("end must be on or after start")
@@ -188,7 +196,38 @@ class LocalDataRepo:
             return empty_macro_series()
         dates = pd.to_datetime(storage["date"]).dt.date
         mask = storage["series_id"].astype(str).isin(wanted) & (dates >= start) & (dates <= end)
-        return canonicalize_macro_series(storage.loc[mask].copy())
+        return latest_macro_by_asof(canonicalize_macro_series(storage.loc[mask].copy()))
+
+    def get_macro_series_asof(
+        self,
+        series_ids: list[str],
+        start: date,
+        end: date,
+        as_of_utc: datetime,
+    ) -> pd.DataFrame:
+        """Return macro series as known at ``as_of_utc`` (07 §3 bitemporal replay).
+
+        Official revisions (e.g. an NFCI backfill) arrive as new rows with a
+        later ``asof``; a replay reading at a past instant must not see them, so
+        an old manifest replays unchanged (T11 over macro series).
+        """
+
+        if end < start:
+            raise ValueError("end must be on or after start")
+        cutoff = _aware_utc_ts(as_of_utc)
+        wanted = {s.strip().upper() for s in series_ids if s.strip()}
+        storage = self._read_macro_series()
+        if storage.empty or not wanted:
+            return empty_macro_series()
+        dates = pd.to_datetime(storage["date"]).dt.date
+        asof = pd.to_datetime(storage["asof"], utc=True)
+        mask = (
+            storage["series_id"].astype(str).isin(wanted)
+            & (dates >= start)
+            & (dates <= end)
+            & (asof <= cutoff)
+        )
+        return latest_macro_by_asof(canonicalize_macro_series(storage.loc[mask].copy()))
 
     def _read_macro_series(self) -> pd.DataFrame:
         if not self.macro_series_path.exists():

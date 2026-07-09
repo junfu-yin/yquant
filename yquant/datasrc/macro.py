@@ -53,7 +53,14 @@ class MacroUpdateReport:
 
 
 def canonicalize_macro_series(frame: pd.DataFrame) -> pd.DataFrame:
-    """Return a typed macro-series frame, de-duplicated per series/date/source."""
+    """Return a typed macro-series frame, keeping one row per version.
+
+    Storage is bitemporal (07 §3): an official revision arrives as a new row
+    carrying a later ``asof`` rather than overwriting the original. Deduplication
+    therefore keys on ``(series_id, date, source, asof)`` so every version is
+    preserved; collapsing to the value known at a point in time is a *read*
+    concern handled by :func:`latest_macro_by_asof`.
+    """
 
     missing = [column for column in ("series_id", "date", "value") if column not in frame]
     if missing:
@@ -74,6 +81,21 @@ def canonicalize_macro_series(frame: pd.DataFrame) -> pd.DataFrame:
 
     out = out.dropna(subset=["value"])
     out = out.sort_values(["series_id", "date", "source", "asof"])
+    out = out.drop_duplicates(["series_id", "date", "source", "asof"], keep="last")
+    return cast(pd.DataFrame, out.reset_index(drop=True))
+
+
+def latest_macro_by_asof(frame: pd.DataFrame) -> pd.DataFrame:
+    """Collapse bitemporal versions to the latest ``asof`` per series/date/source.
+
+    Callers first restrict ``asof`` to their point-in-time cutoff (or take the
+    whole frame for the current view); this then picks the freshest version that
+    survived that cut, so a revision only wins once its ``asof`` is in scope.
+    """
+
+    if frame.empty:
+        return frame
+    out = frame.sort_values(["series_id", "date", "source", "asof"])
     out = out.drop_duplicates(["series_id", "date", "source"], keep="last")
     return cast(pd.DataFrame, out.reset_index(drop=True))
 

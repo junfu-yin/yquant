@@ -282,3 +282,91 @@ def test_backtest_parser_defaults() -> None:
     assert args.command == "backtest"
     assert args.initial_cash == 100_000.0
     assert args.benchmark == "SPY"
+
+
+def _seed_macro(tmp_path: Path) -> None:
+    repo = LocalDataRepo(tmp_path / "parquet")
+    repo.write_macro_series(
+        pd.DataFrame(
+            {
+                "series_id": "^VIX",
+                "date": [date(2024, 1, 2), date(2024, 1, 3)],
+                "value": [13.0, 14.0],
+                "source": "yfinance",
+                "asof": datetime(2024, 1, 4, tzinfo=UTC),
+            }
+        )
+    )
+
+
+def test_asof_cli_macro_series(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    cfg = _write_config(tmp_path)
+    _seed_macro(tmp_path)
+
+    assert main(
+        ["data", "asof", "--config", str(cfg), "--series", "^VIX",
+         "--start", "2024-01-01", "--end", "2024-01-31",
+         "--as-of-utc", "2024-02-01T00:00:00Z"]
+    ) == 0
+    out = capsys.readouterr().out
+    assert "macro_series_rows: 2" in out
+
+
+def test_asof_cli_requires_symbols_or_series(tmp_path: Path) -> None:
+    cfg = _write_config(tmp_path)
+    assert main(
+        ["data", "asof", "--config", str(cfg),
+         "--start", "2024-01-01", "--end", "2024-01-31",
+         "--as-of-utc", "2024-02-01T00:00:00Z"]
+    ) == 2
+
+
+def _seed_ledger_run(tmp_path: Path) -> str:
+    from yquant.ledger import Event, LedgerStore, Provenance, new_event_id
+
+    store = LedgerStore(tmp_path / "data" / "yquant.db")
+    store.bootstrap()
+    prov = Provenance(git_sha="g", config_hash="c", data_manifest_id="m")
+    root = Event(
+        event_id=new_event_id(datetime(2024, 1, 3, 12, 0, tzinfo=UTC), entropy=b"\x00" * 10),
+        ts=datetime(2024, 1, 3, 12, 0, tzinfo=UTC),
+        kind="data_ingested",
+        payload={"n": 1},
+        run_id="run-x",
+        dedup_key="data_ingested:x",
+        provenance=prov,
+    )
+    leaf = Event(
+        event_id=new_event_id(datetime(2024, 1, 3, 12, 1, tzinfo=UTC), entropy=b"\x01" * 10),
+        ts=datetime(2024, 1, 3, 12, 1, tzinfo=UTC),
+        kind="signal",
+        payload={"n": 2},
+        run_id="run-x",
+        dedup_key="signal:x",
+        provenance=prov,
+        causation_id=root.event_id,
+    )
+    store.append_event(root)
+    store.append_event(leaf)
+    store.record_run_digest("run-x")
+    return leaf.event_id
+
+
+def test_ledger_replay_collect_chain_cli(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cfg = _write_config(tmp_path)
+    leaf_id = _seed_ledger_run(tmp_path)
+
+    assert main(["ledger", "replay", "--config", str(cfg), "--run-id", "run-x", "--strict"]) == 0
+    assert "consistent: True" in capsys.readouterr().out
+
+    bundle = tmp_path / "incident.json"
+    assert main(
+        ["ledger", "collect", "--config", str(cfg), "--run-id", "run-x",
+         "--output", str(bundle)]
+    ) == 0
+    assert bundle.exists()
+
+    assert main(["ledger", "chain", "--config", str(cfg), "--event-id", leaf_id]) == 0
+    assert "depth: 2" in capsys.readouterr().out

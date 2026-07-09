@@ -280,7 +280,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("config.example.toml"),
         help="config file to use",
     )
-    data_asof.add_argument("--symbols", required=True, help="comma-separated tickers")
+    data_asof.add_argument(
+        "--symbols", default=None, help="comma-separated tickers (daily bars)"
+    )
+    data_asof.add_argument(
+        "--series",
+        default=None,
+        help="comma-separated macro series ids, e.g. ^VIX,BAMLH0A0HYM2 (07 §3)",
+    )
     data_asof.add_argument("--start", required=True, help="inclusive start, YYYY-MM-DD")
     data_asof.add_argument("--end", required=True, help="inclusive end, YYYY-MM-DD")
     data_asof.add_argument(
@@ -423,6 +430,41 @@ def build_parser() -> argparse.ArgumentParser:
         help="optional path to write the JSON report artifact",
     )
 
+    ledger = subparsers.add_parser("ledger", help="inspect the decision-event ledger (07)")
+    ledger_subparsers = ledger.add_subparsers(dest="ledger_command", required=True)
+
+    ledger_replay = ledger_subparsers.add_parser(
+        "replay", help="recompute and verify a run digest (07 §4)"
+    )
+    ledger_replay.add_argument(
+        "--config", type=Path, default=Path("config.example.toml"), help="config file to use"
+    )
+    ledger_replay.add_argument("--run-id", required=True, help="run id to replay")
+    ledger_replay.add_argument(
+        "--strict",
+        action="store_true",
+        help="fail (exit 1) on any digest mismatch or provenance drift",
+    )
+
+    ledger_incident = ledger_subparsers.add_parser(
+        "collect", help="collect an incident evidence bundle for a run (07 §6)"
+    )
+    ledger_incident.add_argument(
+        "--config", type=Path, default=Path("config.example.toml"), help="config file to use"
+    )
+    ledger_incident.add_argument("--run-id", required=True, help="run id under investigation")
+    ledger_incident.add_argument(
+        "--output", type=Path, default=None, help="optional path to write the JSON evidence bundle"
+    )
+
+    ledger_chain = ledger_subparsers.add_parser(
+        "chain", help="show the causal chain leading to an event (07 §2)"
+    )
+    ledger_chain.add_argument(
+        "--config", type=Path, default=Path("config.example.toml"), help="config file to use"
+    )
+    ledger_chain.add_argument("--event-id", required=True, help="leaf event id to trace back")
+
     return parser
 
 
@@ -465,6 +507,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_probe(args)
     if args.command == "backtest":
         return _run_backtest(args)
+    if args.command == "ledger":
+        return _run_ledger(args)
 
     parser.print_help()
     return 0
@@ -740,25 +784,38 @@ def _run_data_asof(args: argparse.Namespace) -> int:
         as_of = _parse_deadline_utc(args.as_of_utc)
         if as_of is None:
             raise ValueError("--as-of-utc must be a UTC ISO timestamp")
-        symbols = normalize_symbols(_split_symbols(args.symbols))
-        if not symbols:
-            raise ValueError("--symbols must include at least one ticker")
+        series_ids = _split_symbols(args.series) if args.series else []
+        symbols = normalize_symbols(_split_symbols(args.symbols)) if args.symbols else []
+        if not symbols and not series_ids:
+            raise ValueError("provide --symbols and/or --series")
     except (ConfigError, ValueError) as exc:
         print(f"data asof error: {exc}", file=sys.stderr)
         return 2
 
     repo = LocalDataRepo(cfg.runtime.parquet_dir)
-    bars = repo.get_bars_asof(symbols, start, end, as_of, args.adjust)
-    print("data_asof: daily_bars")
+    print("data_asof")
     print(f"as_of_utc: {as_of.isoformat()}")
     print(f"range: {start.isoformat()}..{end.isoformat()}")
-    print(f"rows: {len(bars)}")
-    if not bars.empty:
-        latest = bars.groupby("symbol")["date"].max()
-        for symbol in symbols:
-            latest_date = latest.get(symbol)
-            shown = latest_date.isoformat() if latest_date is not None else "(none)"
-            print(f"- {symbol}: latest_visible_date={shown}")
+
+    if symbols:
+        bars = repo.get_bars_asof(symbols, start, end, as_of, args.adjust)
+        print(f"daily_bars_rows: {len(bars)}")
+        if not bars.empty:
+            latest = bars.groupby("symbol")["date"].max()
+            for symbol in symbols:
+                latest_date = latest.get(symbol)
+                shown = latest_date.isoformat() if latest_date is not None else "(none)"
+                print(f"- {symbol}: latest_visible_date={shown}")
+
+    if series_ids:
+        macro = repo.get_macro_series_asof(series_ids, start, end, as_of)
+        print(f"macro_series_rows: {len(macro)}")
+        if not macro.empty:
+            latest = macro.groupby("series_id")["date"].max()
+            for series_id in {s.strip().upper() for s in series_ids}:
+                latest_date = latest.get(series_id)
+                shown = latest_date.isoformat() if latest_date is not None else "(none)"
+                print(f"- {series_id}: latest_visible_date={shown}")
     return 0
 
 
@@ -984,6 +1041,93 @@ def _run_backtest(args: argparse.Namespace) -> int:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(report, indent=2), encoding="utf-8")
         print(f"report_artifact: {args.output}")
+    return 0
+
+
+def _run_ledger(args: argparse.Namespace) -> int:
+    if args.ledger_command == "replay":
+        return _run_ledger_replay(args)
+    if args.ledger_command == "collect":
+        return _run_ledger_collect(args)
+    if args.ledger_command == "chain":
+        return _run_ledger_chain(args)
+    return 0
+
+
+def _run_ledger_replay(args: argparse.Namespace) -> int:
+    from yquant.ledger import LedgerStore
+    from yquant.ledger.replay import replay_run
+
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as exc:
+        print(f"ledger replay error: {exc}", file=sys.stderr)
+        return 2
+
+    store = LedgerStore(cfg.runtime.sqlite_path)
+    store.bootstrap()
+    result = replay_run(store, args.run_id)
+    print("ledger replay")
+    print(f"run_id: {result.run_id}")
+    print(f"event_count: {result.event_count}")
+    print(f"recorded_digest: {result.recorded_digest}")
+    print(f"recomputed_digest: {result.recomputed_digest}")
+    print(f"consistent: {result.consistent}")
+    for warning in result.provenance_warnings:
+        print(f"warning: {warning}")
+    if result.first_divergence is not None:
+        print(f"first_divergence: {result.first_divergence}")
+    if args.strict and not result.strict_ok:
+        print("strict replay failed", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _run_ledger_collect(args: argparse.Namespace) -> int:
+    import json
+
+    from yquant.ledger import LedgerStore
+    from yquant.ledger.incident import collect_incident
+
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as exc:
+        print(f"ledger collect error: {exc}", file=sys.stderr)
+        return 2
+
+    store = LedgerStore(cfg.runtime.sqlite_path)
+    store.bootstrap()
+    evidence = collect_incident(store, args.run_id)
+    print("ledger incident collect")
+    print(f"run_id: {evidence.run_id}")
+    print(f"event_count: {evidence.event_count}")
+    print(f"kinds: {', '.join(evidence.kinds) if evidence.kinds else '(none)'}")
+    print(f"replay_strict_ok: {evidence.replay.strict_ok}")
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(evidence.as_dict(), indent=2), encoding="utf-8")
+        print(f"evidence_bundle: {args.output}")
+    return 0
+
+
+def _run_ledger_chain(args: argparse.Namespace) -> int:
+    from yquant.ledger import LedgerStore
+
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as exc:
+        print(f"ledger chain error: {exc}", file=sys.stderr)
+        return 2
+
+    store = LedgerStore(cfg.runtime.sqlite_path)
+    store.bootstrap()
+    chain = store.causal_chain(args.event_id)
+    print("ledger causal chain")
+    print(f"leaf_event_id: {args.event_id}")
+    print(f"depth: {len(chain)}")
+    for record in chain:
+        event = record.event
+        print(f"- {event.event_id} {event.kind} (run={event.run_id})")
     return 0
 
 
