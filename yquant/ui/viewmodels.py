@@ -27,7 +27,7 @@ from yquant.discipline.schemas import TradeProposal
 from yquant.macro.schemas import (
     CommitteeOutput,
     OpportunityBookEntry,
-    is_machine_readable_condition,
+    condition_is_true,
 )
 from yquant.risk.state_machine import PILLARS, RegimeReading
 from yquant.strategies.base import Layer, TargetPortfolio
@@ -167,7 +167,7 @@ def evaluate_thesis(
     the sentinel never manufactures a phantom exit.
     """
 
-    invalidated = _condition_is_true(entry.invalidation_condition, entry.us_ticker, metrics)
+    invalidated = condition_is_true(entry.invalidation_condition, entry.us_ticker, metrics)
     verdict = "invalidated" if invalidated else "alive"
     close = (
         f"close {entry.us_ticker}: invalidation hit ({entry.invalidation_condition})"
@@ -181,63 +181,6 @@ def evaluate_thesis(
         verdict=verdict,
         close_suggestion=close,
     )
-
-
-_COMPARATORS = ("<=", ">=", "==", "<", ">")
-
-
-def _condition_is_true(condition: str, ticker: str, metrics: dict[str, float]) -> bool:
-    """Evaluate a single-comparator machine-readable condition against metrics."""
-
-    if not is_machine_readable_condition(condition):
-        return False
-    for op in _COMPARATORS:  # longest comparators first (see ordering).
-        if op in condition:
-            left, _, right = condition.partition(op)
-            probe = _resolve_probe(left, ticker, metrics)
-            threshold = _first_number(right)
-            if probe is None or threshold is None:
-                return False
-            return _compare(probe, op, threshold)
-    return False
-
-
-def _resolve_probe(left: str, ticker: str, metrics: dict[str, float]) -> float | None:
-    key = left.strip().upper()
-    if key in metrics:
-        return metrics[key]
-    if ticker.upper() in metrics:
-        return metrics[ticker.upper()]
-    # A left side naming a bare metric symbol (e.g. "VIX").
-    for name, value in metrics.items():
-        if name.upper() in key:
-            return value
-    return None
-
-
-def _first_number(text: str) -> float | None:
-    token = ""
-    for ch in text:
-        if ch.isdigit() or ch in ".-":
-            token += ch
-        elif token:
-            break
-    try:
-        return float(token)
-    except ValueError:
-        return None
-
-
-def _compare(left: float, op: str, right: float) -> bool:
-    if op == "<":
-        return left < right
-    if op == "<=":
-        return left <= right
-    if op == ">":
-        return left > right
-    if op == ">=":
-        return left >= right
-    return left == right
 
 
 @dataclass(frozen=True)

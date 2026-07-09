@@ -550,6 +550,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="optional path to write the JSON demo payload",
     )
 
+    overlay = subparsers.add_parser(
+        "overlay",
+        help="M-overlay: 2x leverage clause + paper opportunity book (03 §7, WP16)",
+    )
+    overlay_subparsers = overlay.add_subparsers(dest="overlay_command", required=True)
+    overlay_paper = overlay_subparsers.add_parser(
+        "paper-book",
+        help="replay a frozen shadow-window opportunity book and print statistics (K1')",
+    )
+    overlay_paper.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="optional path to write the JSON paper-book statistics",
+    )
+
     governance = subparsers.add_parser(
         "governance",
         help="M-governance: provider four-piece board + contamination gate (09)",
@@ -653,6 +669,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_macro(args)
     if args.command == "ui":
         return _run_ui(args)
+    if args.command == "overlay":
+        return _run_overlay(args)
     if args.command == "governance":
         return _run_governance(args)
     if args.command == "ledger":
@@ -1521,6 +1539,45 @@ def _run_ui_demo(args: argparse.Namespace) -> int:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
         print(f"demo_payload_artifact: {args.output}")
+    return 0
+
+
+def _run_overlay(args: argparse.Namespace) -> int:
+    if args.overlay_command == "paper-book":
+        return _run_overlay_paper_book(args)
+    return 0
+
+
+def _run_overlay_paper_book(args: argparse.Namespace) -> int:
+    import json
+
+    from yquant.overlay.demo import build_demo_paper_book
+
+    stats = build_demo_paper_book()
+
+    print("overlay paper-book: shadow-window replay (WP16, K1', deterministic)")
+    print(
+        f"entered={stats.entered} invalidated={stats.invalidated} "
+        f"expired={stats.expired} still_open={stats.still_open}"
+    )
+    print(
+        f"invalidation_rate={stats.invalidation_rate:.2%} "
+        f"mean_holding_days={stats.mean_holding_days:.2f}"
+    )
+    for result in stats.results:
+        closed = result.closed_on.isoformat() if result.closed_on else "-"
+        reason = result.close_reason or "-"
+        print(
+            f"  {result.us_ticker}: {result.outcome} "
+            f"closed_on={closed} holding_days={result.holding_days} reason={reason}"
+        )
+
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(
+            json.dumps(stats.as_dict(), indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        print(f"paper_book_artifact: {args.output}")
     return 0
 
 

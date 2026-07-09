@@ -19,6 +19,7 @@ so the deterministic guardrail layer never has to trust prose.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from datetime import date
 from typing import Literal
 from urllib.parse import urlparse
@@ -39,7 +40,10 @@ ThesisDirection = Literal["long", "defensive"]
 # Tokens that make an invalidation condition machine-checkable (03 §5.9 red line).
 _COMPARATORS = ("<=", ">=", "==", "<", ">")
 _CROSS_KEYWORDS = ("crosses", "breaks", "above", "below", "reclaims", "loses")
-_NUMBER_RE = re.compile(r"\d")
+# Directional keywords -> the comparator they imply for a level check.
+_DOWN_KEYWORDS = ("below", "loses")
+_UP_KEYWORDS = ("above", "reclaims", "breaks", "crosses")
+_NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
 
 
 def is_machine_readable_condition(text: str) -> bool:
@@ -56,6 +60,84 @@ def is_machine_readable_condition(text: str) -> bool:
     if any(op in lowered for op in _COMPARATORS):
         return True
     return any(keyword in lowered for keyword in _CROSS_KEYWORDS)
+
+
+def condition_is_true(condition: str, ticker: str, metrics: Mapping[str, float]) -> bool:
+    """Evaluate a single machine-readable condition against ``metrics``.
+
+    The one shared evaluator behind the Thesis sentinel (M6) and the paper
+    opportunity book (WP16): a condition names a probe (the ticker itself or a
+    bare metric symbol like ``VIX``), a comparator or directional keyword, and a
+    numeric threshold. Two grammars are understood — an explicit comparator
+    (``SMH < 180``) and directional prose the committee actually writes
+    (``MCHI closes below 45`` -> ``<``; ``SPY reclaims 420`` -> ``>``). A
+    condition we cannot resolve (missing metric, un-parseable) is treated as
+    *false* so a sentinel never manufactures a phantom exit.
+    """
+
+    if not is_machine_readable_condition(condition):
+        return False
+    lowered = condition.lower()
+
+    for op in _COMPARATORS:  # longest comparators first (see _COMPARATORS ordering).
+        if op in condition:
+            left, _, right = condition.partition(op)
+            probe = _resolve_probe(left, ticker, metrics)
+            threshold = _first_number(right)
+            if probe is None or threshold is None:
+                return False
+            return _compare(probe, op, threshold)
+
+    keyword_op = _keyword_comparator(lowered)
+    threshold = _last_number(condition)
+    if keyword_op is None or threshold is None:
+        return False
+    probe = _resolve_probe(condition, ticker, metrics)
+    return False if probe is None else _compare(probe, keyword_op, threshold)
+
+
+def _keyword_comparator(lowered: str) -> str | None:
+    """Map a directional keyword to the comparator it implies (down -> ``<``)."""
+
+    if any(word in lowered for word in _DOWN_KEYWORDS):
+        return "<"
+    if any(word in lowered for word in _UP_KEYWORDS):
+        return ">"
+    return None
+
+
+def _resolve_probe(left: str, ticker: str, metrics: Mapping[str, float]) -> float | None:
+    key = left.strip().upper()
+    if key in metrics:
+        return metrics[key]
+    if ticker.upper() in metrics:
+        return metrics[ticker.upper()]
+    for name, value in metrics.items():  # a left side naming a bare metric symbol.
+        if name.upper() in key:
+            return value
+    return None
+
+
+def _first_number(text: str) -> float | None:
+    match = _NUMBER_RE.search(text)
+    return float(match.group()) if match is not None else None
+
+
+def _last_number(text: str) -> float | None:
+    matches = _NUMBER_RE.findall(text)
+    return float(matches[-1]) if matches else None
+
+
+def _compare(left: float, op: str, right: float) -> bool:
+    if op == "<":
+        return left < right
+    if op == "<=":
+        return left <= right
+    if op == ">":
+        return left > right
+    if op == ">=":
+        return left >= right
+    return left == right
 
 
 class MacroEventCard(BaseModel):
