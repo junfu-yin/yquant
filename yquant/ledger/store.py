@@ -32,6 +32,17 @@ CREATE TABLE IF NOT EXISTS job_runs (
 )
 """
 
+_REGIME_HISTORY_DDL = """
+CREATE TABLE IF NOT EXISTS regime_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts_utc TEXT NOT NULL,
+    date TEXT NOT NULL UNIQUE,
+    state TEXT NOT NULL,
+    composite REAL NOT NULL,
+    detail_json TEXT NOT NULL
+)
+"""
+
 
 @dataclass(frozen=True)
 class RiskEventRecord:
@@ -51,6 +62,16 @@ class JobRunRecord:
     detail: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class RegimeRecord:
+    id: int
+    ts_utc: datetime
+    date: date
+    state: str
+    composite: float
+    detail: dict[str, Any]
+
+
 class LedgerStore:
     """Single-file SQLite ledger. Cheap to open; safe to bootstrap repeatedly."""
 
@@ -64,6 +85,7 @@ class LedgerStore:
         with closing(self._connect()) as conn:
             conn.execute(_RISK_EVENTS_DDL)
             conn.execute(_JOB_RUNS_DDL)
+            conn.execute(_REGIME_HISTORY_DDL)
             conn.commit()
 
     def record_risk_event(
@@ -118,6 +140,40 @@ class LedgerStore:
             conn.commit()
             return int(cursor.lastrowid or 0)
 
+    def record_regime(
+        self,
+        *,
+        as_of: date,
+        state: str,
+        composite: float,
+        detail: dict[str, Any] | None = None,
+        recorded_at_utc: datetime | None = None,
+    ) -> int:
+        """Persist (or replace) one day's regime reading; returns its row id.
+
+        The ``date`` column is unique: re-running a day's evaluation overwrites
+        the prior row so a replay stays idempotent (07).
+        """
+
+        recorded_at = _aware_utc(recorded_at_utc or datetime.now(UTC))
+        with closing(self._connect()) as conn:
+            cursor = conn.execute(
+                "INSERT INTO regime_history (ts_utc, date, state, composite, detail_json) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(date) DO UPDATE SET "
+                "ts_utc=excluded.ts_utc, state=excluded.state, "
+                "composite=excluded.composite, detail_json=excluded.detail_json",
+                (
+                    recorded_at.isoformat(),
+                    as_of.isoformat(),
+                    state,
+                    float(composite),
+                    json.dumps(detail or {}, ensure_ascii=True, sort_keys=True),
+                ),
+            )
+            conn.commit()
+            return int(cursor.lastrowid or 0)
+
     def list_risk_events(self, *, limit: int | None = None) -> list[RiskEventRecord]:
         query = "SELECT id, ts_utc, date, rule, detail_json FROM risk_events ORDER BY id"
         rows = self._fetch(query, limit)
@@ -142,6 +198,24 @@ class LedgerStore:
                 job=str(row[2]),
                 status=str(row[3]),
                 detail=json.loads(row[4]),
+            )
+            for row in rows
+        ]
+
+    def list_regime_history(self, *, limit: int | None = None) -> list[RegimeRecord]:
+        query = (
+            "SELECT id, ts_utc, date, state, composite, detail_json "
+            "FROM regime_history ORDER BY date"
+        )
+        rows = self._fetch(query, limit)
+        return [
+            RegimeRecord(
+                id=int(row[0]),
+                ts_utc=_parse_utc(str(row[1])),
+                date=date.fromisoformat(str(row[2])),
+                state=str(row[3]),
+                composite=float(row[4]),
+                detail=json.loads(row[5]),
             )
             for row in rows
         ]

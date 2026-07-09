@@ -8,11 +8,13 @@ single SQLite schema for that evidence so those callers never touch raw SQL.
 from yquant.ledger.store import (
     JobRunRecord,
     LedgerStore,
+    RegimeRecord,
     RiskEventRecord,
 )
 
 __all__ = [
     "JobRunRecord",
     "LedgerStore",
+    "RegimeRecord",
     "RiskEventRecord",
 ]
