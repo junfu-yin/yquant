@@ -75,6 +75,22 @@ class FeishuConfig:
 
 
 @dataclass(frozen=True)
+class CostConfig:
+    """M2 execution cost parameters (03 §5.2), all USD / ratios.
+
+    Optional ``[cost]`` section; defaults match :class:`UsCostModel` so a config
+    without the section reproduces the tested cost model exactly.
+    """
+
+    commission_per_trade_usd: float = 9.50
+    sec_fee_rate: float = 0.0000278
+    finra_taf_per_share: float = 0.000166
+    finra_taf_cap_usd: float = 8.30
+    slippage_rate_etf: float = 0.0005
+    slippage_rate_single: float = 0.0010
+
+
+@dataclass(frozen=True)
 class NotificationConfig:
     feishu: FeishuConfig
 
@@ -105,6 +121,7 @@ class AppConfig:
     data: DataConfig
     llm: LLMConfig
     risk: RiskConfig
+    cost: CostConfig
     notification: NotificationConfig
     schedule: ScheduleConfig
 
@@ -122,6 +139,7 @@ def load_config(path: str | Path = "config.example.toml") -> AppConfig:
         data = _data_config(raw["data"])
         llm = _llm_config(raw["llm"])
         risk = _risk_config(raw["risk"])
+        cost = _cost_config(raw.get("cost"))
         notification = _notification_config(raw["notification"])
         schedule = _schedule_config(raw.get("schedule"))
     except KeyError as exc:
@@ -134,6 +152,7 @@ def load_config(path: str | Path = "config.example.toml") -> AppConfig:
         data=data,
         llm=llm,
         risk=risk,
+        cost=cost,
         notification=notification,
         schedule=schedule,
     )
@@ -220,6 +239,31 @@ def _risk_config(raw: dict[str, Any]) -> RiskConfig:
         raise ConfigError("risk.cooldown_loss_count must be positive")
     if cfg.cooldown_trading_days <= 0:
         raise ConfigError("risk.cooldown_trading_days must be positive")
+    return cfg
+
+
+def _cost_config(raw: dict[str, Any] | None) -> CostConfig:
+    if not raw:
+        return CostConfig()
+
+    cfg = CostConfig(
+        commission_per_trade_usd=float(raw.get("commission_per_trade_usd", 9.50)),
+        sec_fee_rate=float(raw.get("sec_fee_rate", 0.0000278)),
+        finra_taf_per_share=float(raw.get("finra_taf_per_share", 0.000166)),
+        finra_taf_cap_usd=float(raw.get("finra_taf_cap_usd", 8.30)),
+        slippage_rate_etf=float(raw.get("slippage_rate_etf", 0.0005)),
+        slippage_rate_single=float(raw.get("slippage_rate_single", 0.0010)),
+    )
+    for name, value in (
+        ("cost.commission_per_trade_usd", cfg.commission_per_trade_usd),
+        ("cost.sec_fee_rate", cfg.sec_fee_rate),
+        ("cost.finra_taf_per_share", cfg.finra_taf_per_share),
+        ("cost.finra_taf_cap_usd", cfg.finra_taf_cap_usd),
+        ("cost.slippage_rate_etf", cfg.slippage_rate_etf),
+        ("cost.slippage_rate_single", cfg.slippage_rate_single),
+    ):
+        if value < 0:
+            raise ConfigError(f"{name} must be non-negative")
     return cfg
 
 

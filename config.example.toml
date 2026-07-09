@@ -42,6 +42,17 @@ cooldown_trading_days = 3
 [notification.feishu]
 webhook_env = "YQUANT_FEISHU_WEBHOOK"
 
+[cost]
+# M2 execution cost model (03 §5.2). Defaults match UsCostModel; verify the
+# Selfwealth commission in WP0 AS-8. Slippage is tiered: ETFs 0.05%, single
+# stocks 0.10% of notional. SEC fee + FINRA TAF apply on sells only.
+commission_per_trade_usd = 9.50
+sec_fee_rate = 0.0000278
+finra_taf_per_share = 0.000166
+finra_taf_cap_usd = 8.30
+slippage_rate_etf = 0.0005
+slippage_rate_single = 0.0010
+
 [schedule]
 # Unattended M1 daemon (optional). Cron strings are standard 5-field expressions
 # interpreted in runtime.timezone; leave a *_cron unset to disable that job.

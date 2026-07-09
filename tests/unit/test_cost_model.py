@@ -13,6 +13,21 @@ def test_us_buy_has_no_sec_or_taf() -> None:
     assert cost.slippage == Decimal("100") * Decimal("200") * Decimal("0.0005")
 
 
+def test_single_stock_slippage_is_double_the_etf_tier() -> None:
+    etf = us_trade_cost("buy", Decimal("100"), Decimal("200"), instrument="etf")
+    single = us_trade_cost("buy", Decimal("100"), Decimal("200"), instrument="single_stock")
+    assert single.slippage == etf.slippage * Decimal("2")
+    assert single.slippage == Decimal("100") * Decimal("200") * Decimal("0.0010")
+
+
+def test_cost_breakdown_scaled_multiplies_all_components() -> None:
+    cost = us_trade_cost("sell", Decimal("100"), Decimal("200"))
+    zero = cost.scaled(Decimal("0"))
+    doubled = cost.scaled(Decimal("2"))
+    assert zero.total == Decimal("0")
+    assert doubled.total == cost.total * Decimal("2")
+
+
 def test_us_sell_charges_sec_and_taf() -> None:
     cost = us_trade_cost("sell", Decimal("100"), Decimal("200"))
     notional = Decimal("20000")

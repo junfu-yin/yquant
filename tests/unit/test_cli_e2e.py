@@ -203,3 +203,82 @@ def test_invalid_dates_return_error_code(tmp_path: Path) -> None:
         ["data", "asof", "--config", str(cfg), "--symbols", "AAPL",
          "--start", "not-a-date", "--end", "2024-01-31", "--as-of-utc", "2024-02-01T00:00:00Z"]
     ) == 2
+
+
+def _rising_bars(symbol: str, closes: list[float], source: str = "yfinance") -> pd.DataFrame:
+    dates = pd.date_range("2024-01-02", periods=len(closes), freq="B")
+    series = pd.Series(closes)
+    return make_daily_bars_frame(
+        symbol=symbol,
+        market="us",
+        dates=pd.Series(pd.to_datetime(dates)),
+        raw_open=series,
+        raw_high=series + 1.0,
+        raw_low=series - 1.0,
+        raw_close=series,
+        volume=pd.Series([1_000] * len(closes)),
+        source=source,
+        asof=datetime(2024, 3, 1, 21, 0, tzinfo=UTC),
+    )
+
+
+def test_backtest_cli_runs_and_writes_report(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cfg = _write_config(tmp_path)
+    repo = LocalDataRepo(tmp_path / "parquet")
+    repo.write_daily_bars(_rising_bars("SPY", [100.0, 105.0, 110.0, 115.0, 120.0]))
+    out_path = tmp_path / "report.json"
+
+    code = main(
+        ["backtest", "--config", str(cfg), "--symbols", "SPY",
+         "--start", "2024-01-01", "--end", "2024-03-01",
+         "--initial-cash", "100000", "--output", str(out_path)]
+    )
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "backtest: deterministic engine" in out
+    assert "digest:" in out
+    assert "cost 0x:" in out and "cost 2x:" in out
+    assert out_path.exists()
+
+    import json
+
+    report = json.loads(out_path.read_text(encoding="utf-8"))
+    assert report["benchmark"]["symbol"] == "SPY"
+    tiers = [row["tier"] for row in report["cost_sensitivity"]]
+    assert tiers == ["0x", "1x", "2x"]
+
+
+def test_backtest_cli_errors_on_empty_repo(tmp_path: Path) -> None:
+    cfg = _write_config(tmp_path)
+    LocalDataRepo(tmp_path / "parquet")  # empty repo, no bars written.
+
+    code = main(
+        ["backtest", "--config", str(cfg), "--symbols", "SPY",
+         "--start", "2024-01-01", "--end", "2024-03-01"]
+    )
+    assert code == 1
+
+
+def test_backtest_cli_rejects_mismatched_weights(tmp_path: Path) -> None:
+    cfg = _write_config(tmp_path)
+    repo = LocalDataRepo(tmp_path / "parquet")
+    repo.write_daily_bars(_rising_bars("SPY", [100.0, 105.0]))
+
+    code = main(
+        ["backtest", "--config", str(cfg), "--symbols", "SPY,QQQ",
+         "--weights", "1.0", "--start", "2024-01-01", "--end", "2024-03-01"]
+    )
+    assert code == 2
+
+
+def test_backtest_parser_defaults() -> None:
+    from yquant.cli import build_parser
+
+    args = build_parser().parse_args(
+        ["backtest", "--symbols", "SPY", "--start", "2024-01-01", "--end", "2024-03-01"]
+    )
+    assert args.command == "backtest"
+    assert args.initial_cash == 100_000.0
+    assert args.benchmark == "SPY"

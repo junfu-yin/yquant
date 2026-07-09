@@ -6,9 +6,10 @@ import argparse
 import os
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from yquant.config import ConfigError, load_config
 from yquant.datasrc import (
@@ -38,6 +39,10 @@ from yquant.scheduler.jobs import (
     run_update_job,
 )
 from yquant.version import __version__
+
+if TYPE_CHECKING:
+    from yquant.backtest import TargetProvider
+    from yquant.strategies.base import TargetPortfolio
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -373,6 +378,51 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_output_dir(all_sources)
 
+    backtest = subparsers.add_parser(
+        "backtest",
+        help="run an M2 deterministic backtest and emit the report",
+    )
+    backtest.add_argument(
+        "--config",
+        type=Path,
+        default=Path("config.example.toml"),
+        help="config file to use",
+    )
+    backtest.add_argument(
+        "--symbols",
+        required=True,
+        help="comma-separated tickers to hold, e.g. SPY,QQQ",
+    )
+    backtest.add_argument(
+        "--weights",
+        default=None,
+        help="comma-separated target weights matching --symbols; defaults to equal weight",
+    )
+    backtest.add_argument("--start", required=True, help="inclusive start date, YYYY-MM-DD")
+    backtest.add_argument("--end", required=True, help="inclusive end date, YYYY-MM-DD")
+    backtest.add_argument(
+        "--initial-cash",
+        type=float,
+        default=100_000.0,
+        help="starting cash in USD",
+    )
+    backtest.add_argument(
+        "--benchmark",
+        default="SPY",
+        help="buy-and-hold benchmark symbol for the report comparison",
+    )
+    backtest.add_argument(
+        "--single-stocks",
+        default=None,
+        help="comma-separated subset of --symbols priced with the single-stock slippage tier",
+    )
+    backtest.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="optional path to write the JSON report artifact",
+    )
+
     return parser
 
 
@@ -413,6 +463,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_schedule(args)
     if args.command == "probe":
         return _run_probe(args)
+    if args.command == "backtest":
+        return _run_backtest(args)
 
     parser.print_help()
     return 0
@@ -815,6 +867,124 @@ def _run_schedule_run(args: argparse.Namespace) -> int:
 
 def _split_symbols(raw: str) -> list[str]:
     return [symbol for chunk in raw.split(",") for symbol in [chunk.strip()] if symbol]
+
+
+def _parse_weights(raw: str | None, symbols: list[str]) -> dict[str, float]:
+    if raw is None or not raw.strip():
+        weight = 1.0 / len(symbols)
+        return {symbol: weight for symbol in symbols}
+    values = [float(chunk.strip()) for chunk in raw.split(",") if chunk.strip()]
+    if len(values) != len(symbols):
+        raise ValueError("--weights must have one value per symbol")
+    if any(value < 0 for value in values):
+        raise ValueError("--weights must be non-negative")
+    if sum(values) > 1.0 + 1e-9:
+        raise ValueError("--weights must sum to at most 1.0")
+    return dict(zip(symbols, values, strict=True))
+
+
+def _static_target_provider(weights: dict[str, float]) -> TargetProvider:
+    from yquant.strategies.base import Layer, TargetPortfolio
+
+    placed = {"done": False}
+
+    def provider(day: date, closes: Mapping[str, float]) -> TargetPortfolio | None:
+        if placed["done"]:
+            return None
+        if not all(symbol in closes for symbol in weights):
+            return None
+        placed["done"] = True
+        layers: dict[str, Layer] = {symbol: "core" for symbol in weights}
+        return TargetPortfolio(
+            as_of=day,
+            weights=dict(weights),
+            layers=layers,
+            cash_weight=max(0.0, 1.0 - sum(weights.values())),
+        )
+
+    return provider
+
+
+def _run_backtest(args: argparse.Namespace) -> int:
+    import json
+    from typing import cast
+
+    from yquant.backtest import Instrument, UsCostModel, build_report
+
+    try:
+        cfg = load_config(args.config)
+        start = date.fromisoformat(args.start)
+        end = date.fromisoformat(args.end)
+        if end < start:
+            raise ValueError("--end must be on or after --start")
+        symbols = normalize_symbols(_split_symbols(args.symbols))
+        if not symbols:
+            raise ValueError("--symbols must include at least one ticker")
+        weights = _parse_weights(args.weights, symbols)
+        if args.initial_cash <= 0:
+            raise ValueError("--initial-cash must be positive")
+    except (ConfigError, ValueError) as exc:
+        print(f"backtest error: {exc}", file=sys.stderr)
+        return 2
+
+    single_stocks = set(normalize_symbols(_split_symbols(args.single_stocks or "")))
+    instruments: dict[str, Instrument] = {
+        symbol: ("single_stock" if symbol in single_stocks else "etf") for symbol in symbols
+    }
+    benchmark = normalize_symbols([args.benchmark])[0]
+
+    repo = LocalDataRepo(cfg.runtime.parquet_dir)
+    load_symbols = sorted({*symbols, benchmark})
+    bars = repo.get_bars(load_symbols, start, end, "adjusted")
+    if bars.empty:
+        print("backtest error: no bars found for the requested range", file=sys.stderr)
+        return 1
+
+    cost_model = UsCostModel.from_rates(
+        commission_per_trade=cfg.cost.commission_per_trade_usd,
+        sec_fee_rate=cfg.cost.sec_fee_rate,
+        finra_taf_per_share=cfg.cost.finra_taf_per_share,
+        finra_taf_cap=cfg.cost.finra_taf_cap_usd,
+        slippage_rate_etf=cfg.cost.slippage_rate_etf,
+        slippage_rate_single=cfg.cost.slippage_rate_single,
+    )
+    report = build_report(
+        bars=bars,
+        target_provider=_static_target_provider(weights),
+        initial_cash=args.initial_cash,
+        cost_model=cost_model,
+        instruments=instruments,
+        benchmark_symbol=benchmark,
+    )
+
+    strategy = cast("dict[str, object]", report["strategy"])
+    metrics = cast("dict[str, float]", strategy["metrics"])
+    print("backtest: deterministic engine")
+    print(f"symbols: {', '.join(symbols)}")
+    print(f"range: {start.isoformat()}..{end.isoformat()}")
+    print(f"digest: {strategy['digest']}")
+    print(f"total_return: {metrics['total_return']:.4f}")
+    print(f"annualized_return: {metrics['annualized_return']:.4f}")
+    print(f"max_drawdown: {metrics['max_drawdown']:.4f}")
+    print(f"gfv_count: {metrics['gfv_count']}")
+    benchmark_block = cast("dict[str, object] | None", report["benchmark"])
+    if benchmark_block is not None:
+        bench_metrics = cast("dict[str, float]", benchmark_block["metrics"])
+        print(f"benchmark {benchmark}: total_return={bench_metrics['total_return']:.4f}")
+    for tier in cast("list[dict[str, object]]", report["cost_sensitivity"]):
+        tier_metrics = cast("dict[str, float]", tier["metrics"])
+        print(f"cost {tier['tier']}: final_equity={tier_metrics['final_equity']:.2f}")
+    for warning in cast("list[str]", report["warnings"]):
+        print(f"warning: {warning}")
+    rejections = cast("list[object]", report["rejections"])
+    if rejections:
+        print(f"rejections: {len(rejections)}")
+
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        print(f"report_artifact: {args.output}")
+    return 0
 
 
 def _parse_deadline_utc(raw: str | None) -> datetime | None:
