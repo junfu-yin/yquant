@@ -475,6 +475,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="optional path to write the JSON drill ledger",
     )
 
+    paper = subparsers.add_parser(
+        "paper",
+        help="run the L1/L2 paper path: T7 dual-engine parity + shadow report (08)",
+    )
+    paper.add_argument(
+        "--window",
+        default="2020_covid",
+        help="golden window key to drive the parity run (e.g. 2020_covid)",
+    )
+    paper.add_argument(
+        "--initial-cash",
+        type=float,
+        default=50_000.0,
+        help="virtual sim-account cash in USD (08 §1 default $50,000)",
+    )
+    paper.add_argument(
+        "--min-sessions",
+        type=int,
+        default=20,
+        help="minimum sessions for the L1 shadow gate (08 §1)",
+    )
+    paper.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="optional path to write the JSON parity/shadow artifact",
+    )
+
     ledger = subparsers.add_parser("ledger", help="inspect the decision-event ledger (07)")
     ledger_subparsers = ledger.add_subparsers(dest="ledger_command", required=True)
 
@@ -554,6 +582,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_backtest(args)
     if args.command == "qa":
         return _run_qa(args)
+    if args.command == "paper":
+        return _run_paper(args)
     if args.command == "ledger":
         return _run_ledger(args)
 
@@ -1268,6 +1298,51 @@ def _run_qa_drills(args: argparse.Namespace) -> int:
         args.output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         print(f"drill_ledger_artifact: {args.output}")
     return 0
+
+
+def _run_paper(args: argparse.Namespace) -> int:
+    import json
+
+    from yquant.datasrc.bars import repo_view
+    from yquant.paper.parity import shadow_reconciliation
+    from yquant.qa import build_golden_bars
+
+    if args.initial_cash <= 0:
+        print("paper error: --initial-cash must be positive", file=sys.stderr)
+        return 2
+    try:
+        storage = build_golden_bars(args.window)
+    except KeyError as exc:
+        print(f"paper error: {exc}", file=sys.stderr)
+        return 2
+
+    bars = repo_view(storage)
+    report = shadow_reconciliation(
+        bars=bars,
+        provider_factory=_golden_panel_provider,
+        initial_cash=args.initial_cash,
+        min_sessions=args.min_sessions,
+    )
+    parity = report.parity
+
+    print(f"paper: T7 dual-engine parity + L1 shadow (window={args.window}, 08 §1-§2)")
+    print(f"sessions: {parity.sessions}")
+    print(
+        f"parity: max_daily={parity.max_daily_bps:.4f}bps "
+        f"(cap {parity.daily_cap_bps}) cumulative={parity.cumulative_bps:.4f}bps "
+        f"(cap {parity.cumulative_cap_bps})"
+    )
+    print(f"digest_match: {parity.backtest_digest == parity.paper_digest}")
+    print(f"reconciliation_breaches: {report.reconciliation_breaches}")
+    print(f"meets_min_sessions({args.min_sessions}): {report.meets_min_sessions}")
+    verdict = "PASS" if report.passed else "FAIL"
+    print(f"shadow_verdict: {verdict}")
+
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(report.as_dict(), indent=2), encoding="utf-8")
+        print(f"shadow_artifact: {args.output}")
+    return 0 if report.passed else 1
 
 
 def _run_ledger(args: argparse.Namespace) -> int:

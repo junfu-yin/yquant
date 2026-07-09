@@ -434,3 +434,42 @@ def test_qa_drills_cli_writes_ledger(
     assert kinds.count("historical_event") == 4
     assert kinds.count("fire") == 1
     assert all(r["contaminated"] for r in payload["records"])
+
+
+def test_paper_cli_parity_passes_and_writes_artifact(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import json
+
+    out_path = tmp_path / "shadow.json"
+    code = main(
+        ["paper", "--window", "2020_covid", "--initial-cash", "50000",
+         "--min-sessions", "20", "--output", str(out_path)]
+    )
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "shadow_verdict: PASS" in out
+    assert "digest_match: True" in out
+    assert out_path.exists()
+
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["passed"] is True
+    assert payload["reconciliation_breaches"] == 0
+    assert payload["parity"]["max_daily_bps"] == 0.0
+
+
+def test_paper_cli_rejects_unknown_window() -> None:
+    assert main(["paper", "--window", "not_a_window"]) == 2
+
+
+def test_paper_cli_rejects_bad_cash() -> None:
+    assert main(["paper", "--initial-cash", "0"]) == 2
+
+
+def test_paper_cli_fails_when_min_sessions_not_met(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # SVB window has fewer sessions than an impossible 10,000-session gate.
+    assert main(["paper", "--window", "2023_svb", "--min-sessions", "100000"]) == 1
+    out = capsys.readouterr().out
+    assert "shadow_verdict: FAIL" in out

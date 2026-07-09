@@ -339,24 +339,18 @@ def run_backtest(
     equity_curve: list[EquityPoint] = []
 
     for day in trading_dates:
-        engine.settle_due(day)
-        closes_today = closes_by_date.get(day, {})
-        last_close.update(closes_today)
-
-        target = target_provider(day, closes_today)
-        if target is not None:
-            _rebalance(
-                engine,
-                target=target,
-                day=day,
-                prices=last_close,
-                closes_today=closes_today,
-                halted_today=halted_by_date.get(day, set()),
-                instruments=instruments,
-                min_weight_change=min_weight_change,
-                warnings=warnings,
-            )
-        equity_curve.append(EquityPoint(day=day, equity=engine.equity(last_close)))
+        equity = step_session(
+            engine,
+            day=day,
+            closes_today=closes_by_date.get(day, {}),
+            halted_today=halted_by_date.get(day, set()),
+            last_close=last_close,
+            target_provider=target_provider,
+            instruments=instruments,
+            min_weight_change=min_weight_change,
+            warnings=warnings,
+        )
+        equity_curve.append(EquityPoint(day=day, equity=equity))
 
     return BacktestResult(
         equity_curve=equity_curve,
@@ -368,6 +362,47 @@ def run_backtest(
         initial_cash=float(initial_cash),
         warnings=warnings,
     )
+
+
+def step_session(
+    engine: BacktestEngine,
+    *,
+    day: date,
+    closes_today: Mapping[str, float],
+    halted_today: set[str],
+    last_close: dict[str, float],
+    target_provider: TargetProvider,
+    instruments: Mapping[str, Instrument],
+    min_weight_change: float = 0.0,
+    warnings: list[str],
+) -> float:
+    """Advance one trading session and return end-of-day equity.
+
+    This is the single source of truth for a day's mechanics — settle, mark,
+    ask the provider for a target, rebalance — shared by :func:`run_backtest`
+    and the live-shaped :class:`~yquant.paper.broker.PaperBroker`, so the two
+    paths are structurally identical (the T7 parity guarantee, 08 §2). Mutates
+    ``last_close`` in place with today's closes so a missing quote holds the
+    prior mark.
+    """
+
+    engine.settle_due(day)
+    last_close.update(closes_today)
+
+    target = target_provider(day, closes_today)
+    if target is not None:
+        _rebalance(
+            engine,
+            target=target,
+            day=day,
+            prices=last_close,
+            closes_today=closes_today,
+            halted_today=halted_today,
+            instruments=instruments,
+            min_weight_change=min_weight_change,
+            warnings=warnings,
+        )
+    return engine.equity(last_close)
 
 
 def _rebalance(
