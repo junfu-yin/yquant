@@ -475,6 +475,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="optional path to write the JSON drill ledger",
     )
 
+    qa_redlines = qa_subparsers.add_parser(
+        "redlines",
+        help="re-prove the five contract red-lines (04 §4, WP6 daily P0-clear proof)",
+    )
+    qa_redlines.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="optional path to write the JSON red-line panel",
+    )
+
     paper = subparsers.add_parser(
         "paper",
         help="run the L1/L2 paper path: T7 dual-engine parity + shadow report (08)",
@@ -1255,6 +1266,8 @@ def _run_qa(args: argparse.Namespace) -> int:
         return _run_qa_panel(args)
     if args.qa_command == "drills":
         return _run_qa_drills(args)
+    if args.qa_command == "redlines":
+        return _run_qa_redlines(args)
     return 0
 
 
@@ -1425,6 +1438,24 @@ def _run_qa_drills(args: argparse.Namespace) -> int:
         args.output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         print(f"drill_ledger_artifact: {args.output}")
     return 0
+
+
+def _run_qa_redlines(args: argparse.Namespace) -> int:
+    import json
+
+    from yquant.qa import build_red_line_panel
+
+    panel = build_red_line_panel()
+    print(panel.render_text())
+
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(
+            json.dumps(panel.as_dict(), indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        print(f"red_line_panel_artifact: {args.output}")
+
+    return 0 if panel.all_pass else 1
 
 
 def _run_paper(args: argparse.Namespace) -> int:

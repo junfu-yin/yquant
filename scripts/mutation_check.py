@@ -93,6 +93,27 @@ MUTATIONS: list[Mutation] = [
         "return self.compared_rows > 0 and self.consistency_rate <= self.minimum_consistency_rate",
         "reconcile: pass threshold direction",
     ),
+    Mutation(
+        "yquant/discipline/overlay_guardrails.py",
+        ["tests/unit/test_redlines.py"],
+        "if exposure.overlay_weight_after > config.overlay_cap:",
+        "if exposure.overlay_weight_after > config.overlay_cap + 1.0:",
+        "redline R1: overlay 10% cap weakened",
+    ),
+    Mutation(
+        "yquant/overlay/leverage.py",
+        ["tests/unit/test_redlines.py"],
+        "if regime is not RegimeState.RISK_ON:\n        failed.append(\"regime_not_risk_on\")",
+        "if False:\n        failed.append(\"regime_not_risk_on\")",
+        "redline R2: 2x regime condition dropped",
+    ),
+    Mutation(
+        "yquant/risk/regime_gate.py",
+        ["tests/unit/test_redlines.py"],
+        "RegimeState.CRISIS: 0.0,",
+        "RegimeState.CRISIS: 1.0,",
+        "redline R4: crisis stops clearing overlay",
+    ),
 ]
 
 

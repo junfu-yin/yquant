@@ -33,6 +33,12 @@ from yquant.qa.metrics import (
     check_p11_layer_budget,
 )
 from yquant.qa.panel import QaPanel, build_panel
+from yquant.qa.redlines import (
+    RedLinePanel,
+    RedLineResult,
+    build_red_line_panel,
+    run_red_line_checks,
+)
 
 __all__ = [
     "GOLDEN_UNIVERSE",
@@ -41,9 +47,12 @@ __all__ = [
     "GoldenWindow",
     "MetricResult",
     "QaPanel",
+    "RedLinePanel",
+    "RedLineResult",
     "build_drill_ledger",
     "build_golden_bars",
     "build_panel",
+    "build_red_line_panel",
     "check_p1_accounting_conservation",
     "check_p2_nav_double_calc",
     "check_p3_source_consistency",
@@ -55,4 +64,5 @@ __all__ = [
     "golden_content_hash",
     "golden_manifest",
     "historical_event_drill",
+    "run_red_line_checks",
 ]
