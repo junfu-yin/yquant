@@ -11,6 +11,8 @@ from __future__ import annotations
 from datetime import date
 from typing import TYPE_CHECKING, Literal
 
+import pandas as pd
+
 from yquant.strategies.base import (
     ExplainContract,
     Inference,
@@ -126,13 +128,31 @@ def _monthly_closes(
     universe: list[str],
     lookback_months: int,
 ) -> dict[str, list[float]]:
-    """Adapter placeholder: derive monthly closes from the repo.
+    """Derive month-end adjusted closes for ``universe`` from the repo.
 
-    Concrete resampling (daily bars → month-end closes) lands with M1/backtest
-    integration; kept minimal here so the provider's rule logic is complete and
-    unit-testable via ``sector_momentum_weights``.
+    Resamples daily bars to the last close of each calendar month (survivorship-
+    safe via the repo read view) and keeps only symbols with at least
+    ``lookback_months`` month-ends, so 12-1 momentum is always defined.
     """
 
-    raise NotImplementedError(
-        "monthly close resampling from DataRepo lands with M1 integration"
-    )
+    symbols = [s for s in universe if s in GICS_SECTOR_ETFS] or list(GICS_SECTOR_ETFS)
+    start = date(as_of.year - (lookback_months // 12 + 2), 1, 1)
+    bars = repo.get_bars(symbols, start, as_of, adjust="adjusted")
+    if bars.empty:
+        return {}
+
+    frame = bars.loc[:, ["symbol", "date", "close"]].copy()
+    frame["symbol"] = frame["symbol"].astype(str)
+    frame["date"] = pd.to_datetime(frame["date"]).dt.date
+
+    out: dict[str, list[float]] = {}
+    for symbol, group in frame.groupby("symbol", sort=True):
+        by_month: dict[tuple[int, int], float] = {}
+        for day, close in zip(group["date"], group["close"], strict=True):
+            if pd.isna(close):
+                continue
+            by_month[(day.year, day.month)] = float(close)  # last close of month wins
+        series = [by_month[key] for key in sorted(by_month)]
+        if len(series) >= lookback_months:
+            out[str(symbol)] = series[-lookback_months:]
+    return out

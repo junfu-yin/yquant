@@ -135,11 +135,14 @@ def build_report(
     instruments: Mapping[str, Instrument] | None = None,
     min_weight_change: float = 0.0,
     benchmark_symbol: str = "SPY",
+    walk_forward: object | None = None,
+    parameter_sensitivity: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Run the strategy at 0/1x/2x cost, plus a SPY benchmark, and report.
 
     Returns a JSON-safe dict with the mandatory M2 report fields. Walk-forward
-    and parameter-sensitivity are left as explicit empty slots for the caller.
+    and parameter sensitivity are computed by the caller (they need multiple
+    providers / parameter sets) and passed in; when omitted the slots stay empty.
     """
 
     base_model = cost_model or UsCostModel()
@@ -182,8 +185,8 @@ def build_report(
         },
         "benchmark": benchmark,
         "cost_sensitivity": cost_tiers,
-        "walk_forward": [],  # seam: caller supplies out-of-sample splits.
-        "parameter_sensitivity": [],  # seam: caller supplies parameter sweeps.
+        "walk_forward": walk_forward if walk_forward is not None else [],
+        "parameter_sensitivity": parameter_sensitivity if parameter_sensitivity is not None else [],
         "warnings": _dedupe(warnings),
         "rejections": [
             {
