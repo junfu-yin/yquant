@@ -370,3 +370,67 @@ def test_ledger_replay_collect_chain_cli(
 
     assert main(["ledger", "chain", "--config", str(cfg), "--event-id", leaf_id]) == 0
     assert "depth: 2" in capsys.readouterr().out
+
+
+def test_qa_golden_cli_prints_hashes(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["qa", "golden", "--window", "2020_covid"]) == 0
+    out = capsys.readouterr().out
+    assert "2020_covid" in out
+    assert "content_hash:" in out
+    assert "manifest_id:" in out
+
+
+def test_qa_golden_cli_all_windows(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["qa", "golden"]) == 0
+    out = capsys.readouterr().out
+    for key in ("2020_covid", "2022_hikes", "2023_svb", "2024_carry"):
+        assert key in out
+
+
+def test_qa_golden_cli_rejects_unknown_window() -> None:
+    assert main(["qa", "golden", "--window", "not_a_window"]) == 2
+
+
+def test_qa_panel_cli_is_green_and_writes_artifact(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import json
+
+    out_path = tmp_path / "panel.json"
+    code = main(
+        ["qa", "panel", "--window", "2023_svb", "--initial-cash", "50000",
+         "--output", str(out_path)]
+    )
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "qa_panel: 2023_svb" in out
+    assert "verdict: GREEN" in out
+    assert out_path.exists()
+
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["passed"] is True
+    metric_ids = [m["metric"] for m in payload["metrics"]]
+    assert metric_ids == ["P1", "P2", "P3", "P4", "P6", "P10", "P11"]
+
+
+def test_qa_panel_cli_rejects_bad_cash() -> None:
+    assert main(["qa", "panel", "--window", "2020_covid", "--initial-cash", "0"]) == 2
+
+
+def test_qa_drills_cli_writes_ledger(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import json
+
+    out_path = tmp_path / "drills.json"
+    assert main(["qa", "drills", "--output", str(out_path)]) == 0
+    out = capsys.readouterr().out
+    assert "qa_drills:" in out
+    assert "fire_drill:" in out
+    assert out_path.exists()
+
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    kinds = [r["kind"] for r in payload["records"]]
+    assert kinds.count("historical_event") == 4
+    assert kinds.count("fire") == 1
+    assert all(r["contaminated"] for r in payload["records"])

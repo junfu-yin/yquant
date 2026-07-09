@@ -42,6 +42,7 @@ from yquant.version import __version__
 
 if TYPE_CHECKING:
     from yquant.backtest import TargetProvider
+    from yquant.risk.state_machine import RegimeReading
     from yquant.strategies.base import TargetPortfolio
 
 
@@ -430,6 +431,50 @@ def build_parser() -> argparse.ArgumentParser:
         help="optional path to write the JSON report artifact",
     )
 
+    qa = subparsers.add_parser("qa", help="run scriptable P-metric quality gates (06)")
+    qa_subparsers = qa.add_subparsers(dest="qa_command", required=True)
+
+    qa_golden = qa_subparsers.add_parser(
+        "golden", help="print frozen golden-window content hashes and manifests (06 §4)"
+    )
+    qa_golden.add_argument(
+        "--window",
+        default="all",
+        help="golden window key (e.g. 2020_covid) or 'all'",
+    )
+
+    qa_panel = qa_subparsers.add_parser(
+        "panel", help="run the P-metric panel over a golden window and print the board (06 §8)"
+    )
+    qa_panel.add_argument(
+        "--window",
+        default="2020_covid",
+        help="golden window key to drive the panel",
+    )
+    qa_panel.add_argument(
+        "--initial-cash",
+        type=float,
+        default=50_000.0,
+        help="starting cash for the panel backtest, in USD",
+    )
+    qa_panel.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="optional path to write the JSON panel artifact",
+    )
+
+    qa_drills = qa_subparsers.add_parser(
+        "drills",
+        help="run the drill台账: four historical-event replays + a fire drill (06 §5)",
+    )
+    qa_drills.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="optional path to write the JSON drill ledger",
+    )
+
     ledger = subparsers.add_parser("ledger", help="inspect the decision-event ledger (07)")
     ledger_subparsers = ledger.add_subparsers(dest="ledger_command", required=True)
 
@@ -507,6 +552,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_probe(args)
     if args.command == "backtest":
         return _run_backtest(args)
+    if args.command == "qa":
+        return _run_qa(args)
     if args.command == "ledger":
         return _run_ledger(args)
 
@@ -1041,6 +1088,185 @@ def _run_backtest(args: argparse.Namespace) -> int:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(report, indent=2), encoding="utf-8")
         print(f"report_artifact: {args.output}")
+    return 0
+
+
+def _run_qa(args: argparse.Namespace) -> int:
+    if args.qa_command == "golden":
+        return _run_qa_golden(args)
+    if args.qa_command == "panel":
+        return _run_qa_panel(args)
+    if args.qa_command == "drills":
+        return _run_qa_drills(args)
+    return 0
+
+
+def _run_qa_golden(args: argparse.Namespace) -> int:
+    from yquant.qa import GOLDEN_WINDOWS, golden_content_hash, golden_manifest
+
+    keys = [w.key for w in GOLDEN_WINDOWS] if args.window == "all" else [args.window]
+    try:
+        print("qa_golden: frozen regression / drill windows (06 §4)")
+        for key in keys:
+            manifest = golden_manifest(key)
+            print(f"- {key}")
+            print(f"  content_hash: {golden_content_hash(key)}")
+            print(f"  manifest_id: {manifest.manifest_id}")
+            print(f"  rows: {manifest.row_count}")
+    except KeyError as exc:
+        print(f"qa golden error: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
+def _golden_panel_provider() -> TargetProvider:
+    """A full-layer target (core + satellite + overlay) over the golden universe."""
+
+    from yquant.strategies.base import Layer, TargetPortfolio
+
+    placed = {"done": False}
+    weights = {"SPY": 0.5, "TLT": 0.2, "GLD": 0.1, "QQQ": 0.08}
+    layers: dict[str, Layer] = {
+        "SPY": "core",
+        "TLT": "core",
+        "GLD": "satellite",
+        "QQQ": "overlay",
+    }
+
+    def provider(day: date, closes: Mapping[str, float]) -> TargetPortfolio | None:
+        if placed["done"] or not all(symbol in closes for symbol in weights):
+            return None
+        placed["done"] = True
+        return TargetPortfolio(
+            as_of=day, weights=dict(weights), layers=dict(layers), cash_weight=0.12
+        )
+
+    return provider
+
+
+def _golden_regime_readings() -> list[RegimeReading]:
+    """A short regime series (one fully-stale period) to exercise P10 availability."""
+
+    from yquant.risk.state_machine import RegimeInputs, replay
+
+    full = RegimeInputs(
+        spy_close=100.0,
+        spy_ma_10m=90.0,
+        pct_sectors_above_200d=0.7,
+        hy_oas_percentile=0.3,
+        hy_oas_change_3m_bp=-60.0,
+        hyg_lqd_z=0.5,
+        vix_level=13.0,
+        vix_term_inversion_days=0,
+        rsp_spy_trend_slope=0.1,
+        pct_above_200d=0.7,
+        nfci=-0.3,
+        nfci_change=-0.1,
+        curve_10y_3m=0.5,
+        usd_change_3m=0.0,
+    )
+    series = [
+        (date(2024, 1, 5), full),
+        (date(2024, 1, 12), RegimeInputs()),  # carried forward -> stale but available
+        (date(2024, 1, 19), full),
+    ]
+    return [reading for _, reading in replay(series)]
+
+
+def _run_qa_panel(args: argparse.Namespace) -> int:
+    import json
+
+    import pandas as pd
+
+    from yquant.backtest.engine import run_backtest
+    from yquant.datasrc.bars import repo_view
+    from yquant.datasrc.reconcile import reconcile_daily_bars
+    from yquant.qa import (
+        build_golden_bars,
+        build_panel,
+        check_p1_accounting_conservation,
+        check_p2_nav_double_calc,
+        check_p3_source_consistency,
+        check_p4_adjusted_price_continuity,
+        check_p6_digest_reproducible,
+        check_p10_state_machine_availability,
+        check_p11_layer_budget,
+    )
+    from yquant.qa.metrics import last_close_by_symbol
+
+    if args.initial_cash <= 0:
+        print("qa panel error: --initial-cash must be positive", file=sys.stderr)
+        return 2
+    try:
+        storage = build_golden_bars(args.window)
+    except KeyError as exc:
+        print(f"qa panel error: {exc}", file=sys.stderr)
+        return 2
+
+    bars = repo_view(storage)
+    result = run_backtest(
+        bars=bars, target_provider=_golden_panel_provider(), initial_cash=args.initial_cash
+    )
+
+    right = storage.copy()
+    right["source"] = "stooq"
+    reconciliation = reconcile_daily_bars(
+        storage, right, left_source="golden", right_source="stooq"
+    )
+
+    spy = bars.loc[bars["symbol"] == "SPY", ["date", "close"]].sort_values("date")
+    spy_dates = pd.to_datetime(spy["date"]).dt.date
+    adjusted = [(d, float(c)) for d, c in zip(spy_dates, spy["close"], strict=True)]
+
+    results = [
+        check_p1_accounting_conservation(result),
+        check_p2_nav_double_calc(result, last_close_by_symbol(bars)),
+        check_p3_source_consistency(reconciliation),
+        check_p4_adjusted_price_continuity(adjusted, event_dates=[]),
+        check_p6_digest_reproducible(
+            bars=bars,
+            provider_factory=_golden_panel_provider,
+            initial_cash=args.initial_cash,
+        ),
+        check_p10_state_machine_availability(_golden_regime_readings()),
+        check_p11_layer_budget({"core": 0.7, "satellite": 0.1, "overlay": 0.08}),
+    ]
+    panel = build_panel(results)
+    print(f"qa_panel: {args.window}")
+    print(panel.render_text())
+
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(panel.as_dict(), indent=2), encoding="utf-8")
+        print(f"panel_artifact: {args.output}")
+    return 0 if panel.passed else 1
+
+
+def _run_qa_drills(args: argparse.Namespace) -> int:
+    import json
+
+    from yquant.qa import build_drill_ledger
+
+    records = build_drill_ledger()
+    print("qa_drills: historical-event + fire drill台账 (06 §5, contaminated)")
+    for record in records:
+        if record.kind == "historical_event":
+            detail = record.detail
+            print(
+                f"- {record.key}: {detail['start_state']} -> {detail['end_state']} "
+                f"(peak_severity={detail['peak_severity']}, periods={detail['periods']})"
+            )
+        else:
+            alerts = record.detail["alerts"]
+            assert isinstance(alerts, list)
+            print(f"- {record.key}: {len(alerts)} S1 alert(s) routed to banner+feishu")
+    print(f"records: {len(records)} (all contaminated; process check, not a performance claim)")
+
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"records": [r.as_dict() for r in records]}
+        args.output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        print(f"drill_ledger_artifact: {args.output}")
     return 0
 
 
