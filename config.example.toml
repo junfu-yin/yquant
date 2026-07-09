@@ -50,6 +50,7 @@ history_days = 5
 update_cron = "30 17 * * 1-5"      # 17:30 New York on weekdays
 freshness_cron = "45 17 * * 1-5"   # after the close
 reconcile_cron = "0 18 * * 5"      # weekly Friday sampled live reconciliation
+regime_cron = "50 17 * * 1-5"      # M9 Layer-1 state machine daily ledger entry
 reconcile_sample_size = 2
 reconcile_seed = 7
 minutes_after_close = 45

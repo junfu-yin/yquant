@@ -14,10 +14,12 @@ class RiskState:
 
     Defaults follow 03 §5.8: ``target_vol`` 11% (band 10-12%), vol-target trigger
     at 1.15x, circuit-breaker at 1.5x for two consecutive weeks, single-holding
-    liquidation cap 20% of ADV.
+    liquidation cap 20% of ADV. ``target_vol_floor`` is the bottom of the 10-12%
+    band the regime gate tightens to in Crisis (03 §5.8 ④ / §5.9, 13 §7 S2).
     """
 
     target_vol: float = 0.11
+    target_vol_floor: float = 0.10
     concentration_caps: dict[str, float] = field(default_factory=dict)
     adv_liquidation_cap: float = 0.20
     vol_target_trigger_ratio: float = 1.15

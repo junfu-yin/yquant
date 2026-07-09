@@ -92,6 +92,7 @@ class ScheduleConfig:
     update_cron: str | None = None
     freshness_cron: str | None = None
     reconcile_cron: str | None = None
+    regime_cron: str | None = None
     reconcile_sample_size: int | None = None
     reconcile_seed: int | None = None
     minutes_after_close: int = 45
@@ -254,6 +255,7 @@ def _schedule_config(raw: dict[str, Any] | None) -> ScheduleConfig:
         update_cron=_optional_str(raw.get("update_cron")),
         freshness_cron=_optional_str(raw.get("freshness_cron")),
         reconcile_cron=_optional_str(raw.get("reconcile_cron")),
+        regime_cron=_optional_str(raw.get("regime_cron")),
         reconcile_sample_size=sample_size,
         reconcile_seed=seed,
         minutes_after_close=minutes_after_close,

@@ -13,12 +13,14 @@ from yquant.datasrc.bars import make_daily_bars_frame
 from yquant.datasrc.repo import LocalDataRepo
 from yquant.ledger import LedgerStore
 from yquant.notify import AlertMessage, FeishuNotifier
+from yquant.risk.state_machine import RegimeConfig, RegimeInputs
 from yquant.scheduler.jobs import (
     JobContext,
     build_job_context,
     build_scheduler,
     run_freshness_job,
     run_reconcile_live_job,
+    run_regime_job,
     run_update_job,
 )
 
@@ -217,6 +219,7 @@ def test_build_scheduler_registers_only_configured_crons(tmp_path: Path) -> None
         update_cron="30 17 * * 1-5",
         freshness_cron="45 17 * * 1-5",
         reconcile_cron=None,
+        regime_cron=None,
     )
     ctx = _context(cfg)
 
@@ -224,3 +227,122 @@ def test_build_scheduler_registers_only_configured_crons(tmp_path: Path) -> None
     job_ids = {job.id for job in scheduler.get_jobs()}
 
     assert job_ids == {"daily_bars_update", "daily_bars_freshness"}
+
+
+# --- regime daily-ledger job (WP14 M9-L1 → M8 linkage) ---------------------
+
+
+def _bearish_inputs() -> RegimeInputs:
+    """Observables that drive every pillar to -1 (composite → Crisis)."""
+
+    return RegimeInputs(
+        spy_close=90.0,
+        spy_ma_10m=100.0,
+        pct_sectors_above_200d=0.20,
+        hy_oas_percentile=0.90,
+        hy_oas_change_3m_bp=200.0,
+        hyg_lqd_z=-1.5,
+        vix_level=35.0,
+        vix_term_inversion_days=7,
+        rsp_spy_trend_slope=-0.2,
+        pct_above_200d=0.20,
+        nfci=0.5,
+        nfci_change=0.2,
+        curve_10y_3m=-0.3,
+        usd_change_3m=0.10,
+    )
+
+
+def test_regime_job_default_provider_starts_neutral_and_ledgers(tmp_path: Path) -> None:
+    cfg = _config(tmp_path, symbols=("SPY",))
+    ctx = _context(cfg)
+
+    outcome = run_regime_job(ctx, on_date=date(2024, 3, 1))
+
+    assert outcome.status == "success"
+    # No observables derived yet → all pillars stale, machine holds Neutral.
+    assert outcome.detail["state"] == "Neutral"
+    assert sorted(outcome.detail["stale_pillars"]) == sorted(RegimeConfig().weights)
+    rows = ctx.ledger.list_regime_history()
+    assert len(rows) == 1 and rows[0].state == "Neutral"
+    assert ctx.ledger.list_job_runs()[-1].job == "macro_regime"
+
+
+def test_regime_job_resumes_hysteresis_across_days(tmp_path: Path) -> None:
+    cfg = _config(tmp_path, symbols=("SPY",))
+    ctx = _context(cfg)
+    ctx.regime_config = RegimeConfig(confirm_periods=2)
+    ctx.regime_inputs_provider = lambda repo, on: _bearish_inputs()
+
+    # Day 1: Crisis is a candidate but hysteresis has not confirmed it yet.
+    day1 = run_regime_job(ctx, on_date=date(2024, 3, 1))
+    assert day1.detail["candidate"] == "Crisis"
+    assert day1.detail["state"] == "Neutral"
+
+    # Day 2: the second consecutive Crisis candidate commits the switch, proving
+    # the pending streak was restored from day 1's ledgered memory snapshot.
+    day2 = run_regime_job(ctx, on_date=date(2024, 3, 4))
+    assert day2.detail["state"] == "Crisis"
+
+    states = [row.state for row in ctx.ledger.list_regime_history()]
+    assert states == ["Neutral", "Crisis"]
+
+
+def test_regime_job_rerun_same_day_is_idempotent(tmp_path: Path) -> None:
+    cfg = _config(tmp_path, symbols=("SPY",))
+    ctx = _context(cfg)
+    ctx.regime_config = RegimeConfig(confirm_periods=1)
+    ctx.regime_inputs_provider = lambda repo, on: _bearish_inputs()
+
+    first = run_regime_job(ctx, on_date=date(2024, 3, 1))
+    second = run_regime_job(ctx, on_date=date(2024, 3, 1))
+
+    # Same date resumes from the prior day (none) both times → identical row.
+    assert first.detail["state"] == second.detail["state"] == "Crisis"
+    rows = ctx.ledger.list_regime_history()
+    assert len(rows) == 1  # upsert, not duplicate
+
+
+def test_regime_job_provider_error_is_recorded_and_alerted(tmp_path: Path) -> None:
+    cfg = _config(tmp_path, symbols=("SPY",))
+    sent: list[AlertMessage] = []
+    ctx = _context(cfg, sent=sent)
+
+    def _boom(repo: LocalDataRepo, on: date) -> RegimeInputs:
+        raise RuntimeError("adapter failed")
+
+    ctx.regime_inputs_provider = _boom
+
+    outcome = run_regime_job(ctx, on_date=date(2024, 3, 1))
+
+    assert outcome.status == "error"
+    assert outcome.alerted is True
+    assert len(sent) == 1
+    assert ctx.ledger.list_regime_history() == []
+    assert ctx.ledger.list_job_runs()[-1].status == "error"
+
+
+def test_regime_job_registered_when_cron_configured(tmp_path: Path) -> None:
+    cfg = _config(tmp_path, symbols=("SPY",), regime_cron="50 17 * * 1-5")
+    ctx = _context(cfg)
+
+    scheduler = build_scheduler(ctx)
+
+    assert scheduler.get_job("macro_regime") is not None
+
+
+def test_regime_job_falls_back_to_initial_on_legacy_row_without_memory(tmp_path: Path) -> None:
+    cfg = _config(tmp_path, symbols=("SPY",))
+    ctx = _context(cfg)
+    # A prior row written before the memory snapshot existed (e.g. legacy schema).
+    ctx.ledger.record_regime(
+        as_of=date(2024, 3, 1), state="Neutral", composite=0.0, detail={"state": "Neutral"}
+    )
+    ctx.regime_config = RegimeConfig(confirm_periods=1)
+    ctx.regime_inputs_provider = lambda repo, on: _bearish_inputs()
+
+    outcome = run_regime_job(ctx, on_date=date(2024, 3, 4))
+
+    # No usable memory snapshot → resume from initial Neutral, then evaluate today.
+    assert outcome.status == "success"
+    assert outcome.detail["state"] == "Crisis"

@@ -161,6 +161,35 @@ class RegimeMemory:
     def initial(cls, state: RegimeState = RegimeState.NEUTRAL) -> RegimeMemory:
         return cls(state=state, pending=None, pending_streak=0, last_scores={})
 
+    def to_detail(self) -> dict[str, object]:
+        """JSON-safe snapshot so a daily job can resume hysteresis across runs."""
+
+        return {
+            "state": self.state.value,
+            "pending": self.pending.value if self.pending is not None else None,
+            "pending_streak": self.pending_streak,
+            "last_scores": dict(sorted(self.last_scores.items())),
+        }
+
+    @classmethod
+    def from_detail(cls, detail: Mapping[str, object]) -> RegimeMemory:
+        """Rebuild memory from a :meth:`to_detail` payload (missing keys default)."""
+
+        raw_state = detail.get("state")
+        state = RegimeState(str(raw_state)) if raw_state is not None else RegimeState.NEUTRAL
+        raw_pending = detail.get("pending")
+        pending = RegimeState(str(raw_pending)) if raw_pending is not None else None
+        raw_streak = detail.get("pending_streak") or 0
+        raw_scores = detail.get("last_scores") or {}
+        scores_items = dict(raw_scores).items() if isinstance(raw_scores, Mapping) else ()
+        last_scores = {str(k): int(str(v)) for k, v in scores_items}
+        return cls(
+            state=state,
+            pending=pending,
+            pending_streak=int(str(raw_streak)),
+            last_scores=last_scores,
+        )
+
 
 def score_trend(inputs: RegimeInputs) -> int | None:
     """SPY vs its 10-month MA, corroborated by sector breadth above the 200d."""

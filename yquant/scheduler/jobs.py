@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, Protocol
 
 from yquant.config import AppConfig
 from yquant.datasrc.freshness import check_daily_bar_freshness, expected_daily_bar_deadline_utc
@@ -25,6 +25,27 @@ from yquant.ledger import LedgerStore
 from yquant.notify import notifier_from_env
 from yquant.notify.alerts import AlertMessage, freshness_alert, live_reconcile_alert
 from yquant.notify.feishu import FeishuNotifier, Transport
+from yquant.risk.state_machine import RegimeConfig, RegimeInputs, RegimeMemory, step
+
+
+class RegimeInputsProvider(Protocol):
+    """Derives the M9 pillar observables for one date from a repo.
+
+    This is the live-data seam between M1 storage and the pure state machine.
+    Deriving the 14 observables (10-month MA, HY-OAS percentile, VIX term
+    structure, NFCI, …) is a data-adapter task; until it lands, the default
+    provider returns an all-``None`` :class:`RegimeInputs` so every pillar is
+    stale and the machine carries forward rather than manufacturing a change
+    (P10). Tests and the future adapter inject a real provider.
+    """
+
+    def __call__(self, repo: LocalDataRepo, on_date: date) -> RegimeInputs: ...
+
+
+def _stale_regime_inputs(repo: LocalDataRepo, on_date: date) -> RegimeInputs:
+    """Default provider: no derived observables yet → fully stale (P10)."""
+
+    return RegimeInputs()
 
 
 @dataclass(frozen=True)
@@ -47,6 +68,8 @@ class JobContext:
     notifier: FeishuNotifier | None
     retry_policy: RetryPolicy | None = None
     sleep: Callable[[float], None] = time.sleep
+    regime_config: RegimeConfig = field(default_factory=RegimeConfig)
+    regime_inputs_provider: RegimeInputsProvider = _stale_regime_inputs
 
 
 def build_job_context(
@@ -203,6 +226,73 @@ def run_reconcile_live_job(ctx: JobContext, *, on_date: date | None = None) -> J
     )
 
 
+_REGIME_JOB = "macro_regime"
+_REGIME_MEMORY_KEY = "memory"
+
+
+def run_regime_job(ctx: JobContext, *, on_date: date | None = None) -> JobOutcome:
+    """Step the M9 Layer-1 state machine one day and ledger the reading (WP14).
+
+    Resumes hysteresis from the last ``regime_history`` row (its detail carries a
+    ``memory`` snapshot), evaluates the injected inputs provider for ``on_date``,
+    then upserts the day's reading. Re-running a date is idempotent: the machine
+    resumes from the *prior* day, so the same inputs reproduce the same row (07).
+    The committed state is what M8's ``apply_risk_controls`` consumes downstream.
+    """
+
+    on = on_date or date.today()
+    try:
+        memory = _load_regime_memory(ctx, before=on)
+        inputs = ctx.regime_inputs_provider(ctx.repo, on)
+        next_memory, reading = step(memory, inputs, ctx.regime_config)
+        detail = reading.to_detail()
+        detail[_REGIME_MEMORY_KEY] = next_memory.to_detail()
+        ctx.ledger.record_regime(
+            as_of=on,
+            state=reading.state.value,
+            composite=reading.composite,
+            detail=detail,
+        )
+    except Exception as exc:  # noqa: BLE001 - job boundary records and alerts
+        return _finish(
+            ctx,
+            _REGIME_JOB,
+            "error",
+            {"as_of": on.isoformat(), "error": _error_text(exc)},
+            alert=_error_alert("regime", exc),
+        )
+
+    return _finish(
+        ctx,
+        _REGIME_JOB,
+        "success",
+        {
+            "as_of": on.isoformat(),
+            "state": reading.state.value,
+            "candidate": reading.candidate.value,
+            "composite": round(reading.composite, 6),
+            "stale_pillars": list(reading.stale_pillars),
+        },
+    )
+
+
+def _load_regime_memory(ctx: JobContext, *, before: date) -> RegimeMemory:
+    """Rebuild memory from the latest regime row strictly before ``before``.
+
+    Rows on or after ``before`` are ignored so a same-day rerun resumes from the
+    prior evaluation and stays idempotent. With no prior history the machine
+    starts Neutral.
+    """
+
+    prior = [row for row in ctx.ledger.list_regime_history() if row.date < before]
+    if not prior:
+        return RegimeMemory.initial()
+    snapshot = prior[-1].detail.get(_REGIME_MEMORY_KEY)
+    if not isinstance(snapshot, dict):
+        return RegimeMemory.initial()
+    return RegimeMemory.from_detail(snapshot)
+
+
 def build_scheduler(ctx: JobContext, *, scheduler: Any | None = None) -> Any:
     """Build an APScheduler configured with the cron jobs from ``ctx.config``.
 
@@ -221,6 +311,7 @@ def build_scheduler(ctx: JobContext, *, scheduler: Any | None = None) -> Any:
         ("daily_bars_update", schedule.update_cron, run_update_job),
         ("daily_bars_freshness", schedule.freshness_cron, run_freshness_job),
         ("daily_bars_live_reconciliation", schedule.reconcile_cron, run_reconcile_live_job),
+        ("macro_regime", schedule.regime_cron, run_regime_job),
     )
     for job_id, cron, func in registrations:
         if not cron:
