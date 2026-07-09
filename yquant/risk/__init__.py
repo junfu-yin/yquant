@@ -9,6 +9,7 @@ Public API:
 
 from __future__ import annotations
 
+from yquant.risk.drawdown_ladder import apply_drawdown_ladder
 from yquant.risk.engine import apply_risk_controls
 from yquant.risk.state_machine import (
     RegimeConfig,
@@ -32,6 +33,7 @@ __all__ = [
     "RiskEvent",
     "RiskInputs",
     "RiskState",
+    "apply_drawdown_ladder",
     "apply_risk_controls",
     "replay",
     "step",

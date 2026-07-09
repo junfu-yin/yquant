@@ -24,6 +24,8 @@ class RiskState:
     adv_liquidation_cap: float = 0.20
     vol_target_trigger_ratio: float = 1.15
     circuit_breaker_ratio: float = 1.5
+    drawdown_freeze_at: float = 0.10
+    drawdown_liquidate_at: float = 0.15
 
 
 @dataclass(frozen=True)
@@ -61,6 +63,9 @@ class RiskInputs:
     - ``asset_classes``: symbol -> class (equity/bond/gold/commodity/cash); the
       vol targeter only scales ``equity``.
     - ``trend_ok``: symbol -> whether it is above its 10-month MA (C2 gate).
+    - ``portfolio_drawdown``: current peak-to-trough drawdown (>= 0); the
+      drawdown circuit ladder (§5.8 ④) freezes adds at 10% and liquidates the
+      Overlay sleeve at 15%.
     """
 
     predicted_annual_vol: float
@@ -70,3 +75,4 @@ class RiskInputs:
     portfolio_value: float = 0.0
     asset_classes: dict[str, str] = field(default_factory=dict)
     trend_ok: dict[str, bool] = field(default_factory=dict)
+    portfolio_drawdown: float = 0.0

@@ -76,7 +76,7 @@ addopts = "-q"
 source = ["yquant"]
 omit = [
   "yquant/__main__.py",
-  "yquant/ui/*",
+  "yquant/ui/app.py",
 ]
 
 [tool.coverage.report]

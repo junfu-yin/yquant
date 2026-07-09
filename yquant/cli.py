@@ -537,6 +537,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="optional path to write the JSON calibration report",
     )
 
+    ui = subparsers.add_parser("ui", help="M6 six-page cockpit (03 §5.6)")
+    ui_subparsers = ui.add_subparsers(dest="ui_command", required=True)
+    ui_demo = ui_subparsers.add_parser(
+        "demo",
+        help="emit the deterministic US-1~6 six-page demo payload as JSON (03 §10)",
+    )
+    ui_demo.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="optional path to write the JSON demo payload",
+    )
+
     ledger = subparsers.add_parser("ledger", help="inspect the decision-event ledger (07)")
     ledger_subparsers = ledger.add_subparsers(dest="ledger_command", required=True)
 
@@ -622,6 +635,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_brief(args)
     if args.command == "macro":
         return _run_macro(args)
+    if args.command == "ui":
+        return _run_ui(args)
     if args.command == "ledger":
         return _run_ledger(args)
 
@@ -1437,6 +1452,58 @@ def _run_macro_calibrate(args: argparse.Namespace) -> int:
         args.output.write_text(json.dumps(report.as_dict(), indent=2), encoding="utf-8")
         print(f"calibration_artifact: {args.output}")
     return 0 if report.passed else 1
+
+
+def _run_ui(args: argparse.Namespace) -> int:
+    if args.ui_command == "demo":
+        return _run_ui_demo(args)
+    return 0
+
+
+def _run_ui_demo(args: argparse.Namespace) -> int:
+    import json
+
+    from yquant.ui.demo import build_demo_payload
+
+    payload = build_demo_payload().to_dict()
+    brief = payload["today_brief"]
+    opportunity = payload["opportunity_risk"]
+    portfolio = payload["portfolio_risk"]
+    journal = payload["trade_journal"]
+    lab = payload["backtest_lab"]
+
+    print("ui demo: six-page cockpit payload (US-1~6, deterministic, LLM-free)")
+    print(f"as_of: {brief['as_of']}")
+    print(
+        f"US-1 今日简报: 天气={brief['weather']['state']} "
+        f"事件卡={len(brief['event_cards'])} Top3={[c['symbol'] for c in brief['top3']]}"
+    )
+    fired = [
+        row["us_ticker"]
+        for row in opportunity["thesis_sentinel"]
+        if row["verdict"] != "alive"
+    ]
+    print(
+        f"US-2/4 机会与风险: 机会簿={len(opportunity['opportunity_book'])} "
+        f"Overlay合计={opportunity['total_overlay_weight']:.2%} 哨兵触发={fired}"
+    )
+    executed = [row for row in journal["rows"] if row["executed"]]
+    blocked = [row for row in journal["rows"] if not row["can_execute"]]
+    print(
+        f"US-3 交易台账: 已执行={len(executed)} 被checklist拦截={len(blocked)} "
+        f"平均滑点={journal['mean_slippage_bps']}bps"
+    )
+    print(f"US-3 组合与风控: Overlay越界(P11)={portfolio['overlay_breach']}")
+    print(
+        f"US-6 回测实验室: 成本档={[t['tier'] for t in lab['cost_sensitivity']]} "
+        f"含SPY对照={lab['benchmark'] is not None} walk_forward槽位={len(lab['walk_forward'])}"
+    )
+
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        print(f"demo_payload_artifact: {args.output}")
+    return 0
 
 
 def _run_ledger(args: argparse.Namespace) -> int:

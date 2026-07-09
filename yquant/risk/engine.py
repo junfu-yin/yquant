@@ -11,10 +11,13 @@ Ordering rationale:
                        layer first (RiskOff halves it, Crisis clears it) and
                        tighten the core vol target, so every downstream
                        mechanism sees the de-risked, de-levered book.
-  1. trend gate      — drop broken assets first (most decisive cut).
-  2. circuit breaker — regime-level satellite halving.
-  3. vol targeter    — scale remaining equity to the (possibly tightened) budget.
-  4. crowding        — cap additions into illiquid names last, so it sees the
+  1. drawdown ladder — our own equity-curve circuit breaker (§5.8 ④): at the
+                       liquidate rung clear the Overlay sleeve and pin the core
+                       vol target to the floor; at the freeze rung only flag.
+  2. trend gate      — drop broken assets first (most decisive cut).
+  3. circuit breaker — regime-level satellite halving.
+  4. vol targeter    — scale remaining equity to the (possibly tightened) budget.
+  5. crowding        — cap additions into illiquid names last, so it sees the
                        already risk-reduced target weights.
 """
 
@@ -25,6 +28,7 @@ from datetime import date
 
 from yquant.risk.circuit_breaker import apply_circuit_breaker
 from yquant.risk.crowding import apply_crowding_sentinel
+from yquant.risk.drawdown_ladder import apply_drawdown_ladder
 from yquant.risk.regime_gate import apply_regime_gate, effective_target_vol
 from yquant.risk.state_machine import RegimeState
 from yquant.risk.trend_gate import apply_trend_gate
@@ -61,6 +65,11 @@ def apply_risk_controls(
         portfolio, gate_events = apply_regime_gate(portfolio, regime, as_of)
         events.extend(gate_events)
         effective_state = replace(state, target_vol=effective_target_vol(state, regime))
+
+    portfolio, ladder_events, effective_state = apply_drawdown_ladder(
+        portfolio, effective_state, inputs, as_of
+    )
+    events.extend(ladder_events)
 
     portfolio, gate_events = apply_trend_gate(portfolio, inputs, as_of)
     events.extend(gate_events)
