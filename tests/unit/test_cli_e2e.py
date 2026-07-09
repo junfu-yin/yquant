@@ -473,3 +473,20 @@ def test_paper_cli_fails_when_min_sessions_not_met(
     assert main(["paper", "--window", "2023_svb", "--min-sessions", "100000"]) == 1
     out = capsys.readouterr().out
     assert "shadow_verdict: FAIL" in out
+
+
+def test_brief_eval_cli_passes_and_writes_artifact(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import json
+
+    out_path = tmp_path / "brief_eval.json"
+    code = main(["brief", "eval", "--output", str(out_path)])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "eval_verdict: PASS" in out
+    assert "trap_miss_count: 0" in out
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["total"] == 120
+    assert payload["passed"] is True
+

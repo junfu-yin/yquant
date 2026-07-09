@@ -503,6 +503,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="optional path to write the JSON parity/shadow artifact",
     )
 
+    brief = subparsers.add_parser(
+        "brief",
+        help="M4 individual-stock event cards: EDGAR pipeline + eval set (03 §5.4)",
+    )
+    brief_subparsers = brief.add_subparsers(dest="brief_command", required=True)
+
+    brief_eval = brief_subparsers.add_parser(
+        "eval",
+        help="run the frozen 120-filing English eval set and print the scorecard (06 §6)",
+    )
+    brief_eval.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="optional path to write the JSON eval scorecard",
+    )
+
     ledger = subparsers.add_parser("ledger", help="inspect the decision-event ledger (07)")
     ledger_subparsers = ledger.add_subparsers(dest="ledger_command", required=True)
 
@@ -584,6 +601,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_qa(args)
     if args.command == "paper":
         return _run_paper(args)
+    if args.command == "brief":
+        return _run_brief(args)
     if args.command == "ledger":
         return _run_ledger(args)
 
@@ -1343,6 +1362,35 @@ def _run_paper(args: argparse.Namespace) -> int:
         args.output.write_text(json.dumps(report.as_dict(), indent=2), encoding="utf-8")
         print(f"shadow_artifact: {args.output}")
     return 0 if report.passed else 1
+
+
+def _run_brief(args: argparse.Namespace) -> int:
+    if args.brief_command == "eval":
+        return _run_brief_eval(args)
+    return 0
+
+
+def _run_brief_eval(args: argparse.Namespace) -> int:
+    import json
+
+    from yquant.brief import run_eval
+
+    metrics = run_eval()
+    print("brief eval: M4 individual-stock event cards (03 §5.4, 06 §6, contaminated)")
+    print(f"samples: {metrics.total} ({metrics.clean} clean + {metrics.traps} traps)")
+    print(f"classification_accuracy: {metrics.classification_accuracy:.2%} (>=85%)")
+    print(f"severity_within_one: {metrics.severity_within_one:.2%} (>=85%)")
+    print(f"severity_high_recall: {metrics.severity_high_recall:.2%} (>=95%)")
+    print(f"direction_accuracy: {metrics.direction_accuracy:.2%} (>=80%)")
+    print(f"trap_miss_count: {metrics.trap_miss_count} (P5 must be 0)")
+    verdict = "PASS" if metrics.passed else "FAIL"
+    print(f"eval_verdict: {verdict}")
+
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(metrics.as_dict(), indent=2), encoding="utf-8")
+        print(f"eval_artifact: {args.output}")
+    return 0 if metrics.passed else 1
 
 
 def _run_ledger(args: argparse.Namespace) -> int:
