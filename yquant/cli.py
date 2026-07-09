@@ -550,6 +550,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="optional path to write the JSON demo payload",
     )
 
+    governance = subparsers.add_parser(
+        "governance",
+        help="M-governance: provider four-piece board + contamination gate (09)",
+    )
+    governance_subparsers = governance.add_subparsers(dest="governance_command", required=True)
+    governance_panel = governance_subparsers.add_parser(
+        "panel",
+        help="assemble the registered-provider governance panel (09 §8)",
+    )
+    governance_panel.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="optional path to write the JSON governance panel",
+    )
+
     ledger = subparsers.add_parser("ledger", help="inspect the decision-event ledger (07)")
     ledger_subparsers = ledger.add_subparsers(dest="ledger_command", required=True)
 
@@ -637,6 +653,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_macro(args)
     if args.command == "ui":
         return _run_ui(args)
+    if args.command == "governance":
+        return _run_governance(args)
     if args.command == "ledger":
         return _run_ledger(args)
 
@@ -1513,6 +1531,44 @@ def _run_ledger(args: argparse.Namespace) -> int:
         return _run_ledger_collect(args)
     if args.ledger_command == "chain":
         return _run_ledger_chain(args)
+    return 0
+
+
+def _run_governance(args: argparse.Namespace) -> int:
+    if args.governance_command == "panel":
+        return _run_governance_panel(args)
+    return 0
+
+
+def _run_governance_panel(args: argparse.Namespace) -> int:
+    import json
+
+    from yquant.governance.demo import (
+        build_demo_governance_panel,
+        demo_thesis_recall_summary,
+    )
+
+    panel = build_demo_governance_panel()
+    recall = demo_thesis_recall_summary()
+
+    print("governance panel: registered-provider four-piece board (09 §8)")
+    print(panel.render_text())
+    print(
+        f"contamination_present: {panel.any_contaminated} "
+        f"blocked: {list(panel.blocked_provider_ids)}"
+    )
+    print(
+        f"thesis_sentinel recall={recall['recall']} "
+        f"(target {recall['recall_target']}) passed={recall['passed']}"
+    )
+
+    if args.output is not None:
+        payload = {"panel": panel.as_dict(), "thesis_recall": recall}
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        print(f"governance_panel_artifact: {args.output}")
     return 0
 
 

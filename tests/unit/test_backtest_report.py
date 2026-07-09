@@ -1,12 +1,15 @@
 """Unit tests for the M2 backtest report builder."""
 
+from collections.abc import Mapping
 from datetime import date, timedelta
 from decimal import Decimal
+from typing import Any, cast
 
 import pandas as pd
 
 from yquant.backtest import build_report, run_backtest
 from yquant.backtest.costs import UsCostModel
+from yquant.backtest.engine import TargetProvider
 from yquant.backtest.report import (
     annualized_return,
     metrics_of,
@@ -27,16 +30,18 @@ def _bars(symbols: tuple[str, ...], n: int = 8) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _hold_first(weights: dict[str, float]) -> object:
+def _hold_first(weights: dict[str, float]) -> TargetProvider:
     placed = {"done": False}
 
-    def provider(day: date, closes: dict[str, float]) -> TargetPortfolio | None:
+    def provider(day: date, closes: Mapping[str, float]) -> TargetPortfolio | None:
         if placed["done"]:
             return None
         placed["done"] = True
-        layers = {s: "core" for s in weights}
         return TargetPortfolio(
-            as_of=day, weights=dict(weights), layers=layers, cash_weight=0.0
+            as_of=day,
+            weights=dict(weights),
+            layers=dict.fromkeys(weights, "core"),
+            cash_weight=0.0,
         )
 
     return provider
@@ -103,9 +108,12 @@ def test_build_report_has_all_sections_and_ordered_tiers() -> None:
         "warnings",
         "rejections",
     }
-    tiers = [row["tier"] for row in report["cost_sensitivity"]]
+    tiers = [row["tier"] for row in cast(list[dict[str, Any]], report["cost_sensitivity"])]
     assert tiers == ["0x", "1x", "2x"]
-    finals = [row["metrics"]["final_equity"] for row in report["cost_sensitivity"]]
+    finals = [
+        row["metrics"]["final_equity"]
+        for row in cast(list[dict[str, Any]], report["cost_sensitivity"])
+    ]
     assert finals[0] >= finals[1] >= finals[2]
 
 
@@ -115,7 +123,7 @@ def test_build_report_warns_when_benchmark_absent() -> None:
         bars=bars, target_provider=_hold_first({"QQQ": 1.0}), initial_cash=100_000.0
     )
     assert report["benchmark"] is None
-    assert any("SPY" in w for w in report["warnings"])
+    assert any("SPY" in w for w in cast(list[str], report["warnings"]))
 
 
 def test_build_report_is_json_serialisable() -> None:

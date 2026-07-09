@@ -74,12 +74,16 @@ class ExplainContract(BaseModel):
 
     The ledger refuses any inference without one. ``ood_score`` is required for
     ``ml_blackbox`` providers; ``caveats`` must always carry at least one entry.
+    ``knowledge_cutoff_note`` (09 §4 ◆) is mandatory for ``llm`` providers whose
+    reasoning touches the post-cutoff world: it must declare that the fact came
+    from that day's inputs, not the model's parametric memory.
     """
 
     kind: ProviderKind
     confidence: float = Field(ge=0, le=1)
     ood_score: float | None = None
     regime_tag: str
+    knowledge_cutoff_note: str | None = None
     evidence: list[str] = Field(default_factory=list)
     similar_history: list[str] = Field(default_factory=list)
     caveats: list[str]
@@ -113,6 +117,9 @@ class ModelCard(BaseModel):
     ``knowledge_cutoff`` is mandatory for ``llm`` / ``ml_blackbox`` providers
     (ADR-24): the evaluation pipeline splits samples on it and marks anything
     before as ``contaminated``. Rule providers may leave it ``None``.
+    ``data_dependencies`` names the manifest datasets the provider reads (09 §1
+    ◆); it is mandatory for ``llm`` / ``ml_blackbox`` providers so contamination
+    and drift can be traced back to a content-addressed source.
     """
 
     provider_id: str
@@ -122,16 +129,22 @@ class ModelCard(BaseModel):
     owner: str
     training_window: tuple[date, date] | None = None
     knowledge_cutoff: date | None = None
+    data_dependencies: list[str] = Field(default_factory=list)
     known_limits: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
     eval_report_ref: str = ""
 
     @model_validator(mode="after")
     def _check_cutoff(self) -> ModelCard:
-        if self.kind in {"llm", "ml_blackbox"} and self.knowledge_cutoff is None:
-            raise ValueError(
-                "knowledge_cutoff is required for llm/ml_blackbox providers (ADR-24, 09 §2)"
-            )
+        if self.kind in {"llm", "ml_blackbox"}:
+            if self.knowledge_cutoff is None:
+                raise ValueError(
+                    "knowledge_cutoff is required for llm/ml_blackbox providers (ADR-24, 09 §2)"
+                )
+            if not self.data_dependencies:
+                raise ValueError(
+                    "data_dependencies is required for llm/ml_blackbox providers (09 §1)"
+                )
         return self
 
 

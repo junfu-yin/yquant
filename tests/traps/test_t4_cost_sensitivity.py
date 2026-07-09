@@ -1,10 +1,13 @@
 """T4 cost sensitivity (06 §2): the 0/1x/2x cost report is always generated."""
 
+from collections.abc import Mapping
 from datetime import date, timedelta
+from typing import Any, cast
 
 import pandas as pd
 
 from yquant.backtest import build_report
+from yquant.backtest.engine import TargetProvider
 from yquant.strategies.base import TargetPortfolio
 
 
@@ -18,10 +21,10 @@ def _bars() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _provider(bars: pd.DataFrame) -> object:
+def _provider(bars: pd.DataFrame) -> TargetProvider:
     first = bars["date"].min()
 
-    def provider(day: date, closes: dict[str, float]) -> TargetPortfolio | None:
+    def provider(day: date, closes: Mapping[str, float]) -> TargetPortfolio | None:
         if day == first:
             return TargetPortfolio(
                 as_of=day,
@@ -40,7 +43,7 @@ def test_t4_three_cost_tiers_are_present_and_ordered() -> None:
         bars=bars, target_provider=_provider(bars), initial_cash=100_000.0
     )
 
-    tiers = report["cost_sensitivity"]
+    tiers = cast(list[dict[str, Any]], report["cost_sensitivity"])
     labels = [row["tier"] for row in tiers]
     assert labels == ["0x", "1x", "2x"]
 
@@ -69,4 +72,4 @@ def test_t4_report_carries_all_mandatory_fields() -> None:
         assert key in report, f"missing mandatory report field: {key}"
 
     assert report["benchmark"] is not None
-    assert report["benchmark"]["symbol"] == "SPY"
+    assert cast(dict[str, Any], report["benchmark"])["symbol"] == "SPY"

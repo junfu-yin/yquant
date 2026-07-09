@@ -1,10 +1,13 @@
 """T0 smoke (06 §2): SPY buy-and-hold backtest ~= index, difference ~= fees."""
 
+from collections.abc import Mapping
 from datetime import date, timedelta
+from typing import Any, cast
 
 import pandas as pd
 
 from yquant.backtest import build_report, run_backtest
+from yquant.backtest.engine import TargetProvider
 from yquant.strategies.base import TargetPortfolio
 
 
@@ -17,10 +20,10 @@ def _spy_bars(closes: list[float]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _buy_and_hold(symbol: str) -> object:
+def _buy_and_hold(symbol: str) -> TargetProvider:
     placed = {"done": False}
 
-    def provider(day: date, closes: dict[str, float]) -> TargetPortfolio | None:
+    def provider(day: date, closes: Mapping[str, float]) -> TargetPortfolio | None:
         if placed["done"] or symbol not in closes:
             return None
         placed["done"] = True
@@ -59,7 +62,10 @@ def test_t0_zero_cost_tier_matches_index_exactly_bar_the_rounding() -> None:
     report = build_report(
         bars=bars, target_provider=_buy_and_hold("SPY"), initial_cash=100_000.0
     )
-    tiers = {row["tier"]: row["metrics"] for row in report["cost_sensitivity"]}
+    tiers = {
+        row["tier"]: row["metrics"]
+        for row in cast(list[dict[str, Any]], report["cost_sensitivity"])
+    }
 
     # 1000 shares * 100 = 100000 exactly, so 0x return equals the index move.
     assert abs(tiers["0x"]["total_return"] - 0.20) < 1e-9

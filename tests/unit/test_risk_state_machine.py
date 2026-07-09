@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -171,7 +172,7 @@ def test_reading_detail_is_json_safe() -> None:
     _, reading = step(RegimeMemory.initial(), _bearish(), RegimeConfig(confirm_periods=1))
     detail = reading.to_detail()
     assert detail["state"] == "Crisis"
-    assert set(detail["pillar_scores"]) == set(RegimeConfig().weights)
+    assert set(cast(dict[str, object], detail["pillar_scores"])) == set(RegimeConfig().weights)
     assert isinstance(detail["composite"], float)
 
 

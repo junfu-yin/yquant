@@ -8,6 +8,8 @@ the banner + Feishu channels.
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 from yquant.qa import build_drill_ledger, fire_drill, historical_event_drill
 from yquant.qa.golden import GOLDEN_WINDOWS, get_window
 
@@ -30,13 +32,13 @@ def test_covid_window_reaches_crisis() -> None:
 def test_deeper_drawdown_windows_stress_at_least_as_hard() -> None:
     covid = historical_event_drill(get_window("2020_covid"))
     carry = historical_event_drill(get_window("2024_carry"))
-    assert covid.detail["peak_severity"] >= carry.detail["peak_severity"]
+    assert cast(int, covid.detail["peak_severity"]) >= cast(int, carry.detail["peak_severity"])
 
 
 def test_fire_drill_escalates_to_s1_banner_and_feishu() -> None:
     record = fire_drill()
     assert record.kind == "fire"
-    alerts = record.detail["alerts"]
+    alerts = cast(list[dict[str, Any]], record.detail["alerts"])
     assert len(alerts) == 2
     for alert in alerts:
         assert alert["severity"] == "S1"

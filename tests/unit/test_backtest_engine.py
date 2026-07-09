@@ -1,5 +1,6 @@
 """Unit + property tests for the M2 deterministic backtest engine."""
 
+from collections.abc import Mapping
 from datetime import date, timedelta
 
 import pandas as pd
@@ -9,7 +10,7 @@ from hypothesis import strategies as st
 
 from yquant.backtest import BacktestEngine, Order, run_backtest
 from yquant.backtest.costs import UsCostModel
-from yquant.backtest.engine import Fill, Rejection
+from yquant.backtest.engine import Fill, Rejection, TargetProvider
 from yquant.strategies.base import TargetPortfolio
 
 
@@ -35,10 +36,10 @@ def _submit(
     return engine.submit_order(order, day=day, price=price, is_halted=is_halted)
 
 
-def _hold_first(symbol: str, weight: float = 1.0) -> object:
+def _hold_first(symbol: str, weight: float = 1.0) -> TargetProvider:
     placed = {"done": False}
 
-    def provider(day: date, closes: dict[str, float]) -> TargetPortfolio | None:
+    def provider(day: date, closes: Mapping[str, float]) -> TargetPortfolio | None:
         if placed["done"] or symbol not in closes:
             return None
         placed["done"] = True
@@ -114,7 +115,7 @@ def test_run_backtest_requires_close_column() -> None:
 def test_missing_price_for_target_records_warning() -> None:
     bars = _linear_bars("SPY", [100.0, 101.0])
 
-    def provider(day: date, closes: dict[str, float]) -> TargetPortfolio | None:
+    def provider(day: date, closes: Mapping[str, float]) -> TargetPortfolio | None:
         if day == bars["date"].min():
             return TargetPortfolio(
                 as_of=day,
@@ -163,7 +164,7 @@ def test_min_weight_change_skips_small_rebalances() -> None:
     bars = _linear_bars("SPY", [100.0, 100.0])
     weights = iter([1.0, 0.995])
 
-    def provider(day: date, closes: dict[str, float]) -> TargetPortfolio | None:
+    def provider(day: date, closes: Mapping[str, float]) -> TargetPortfolio | None:
         weight = next(weights, None)
         if weight is None:
             return None

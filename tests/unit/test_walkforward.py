@@ -1,10 +1,14 @@
 """Unit tests for the walk-forward OOS validation framework (WP3, 03 §5.3)."""
 
+from collections.abc import Mapping
 from datetime import date, timedelta
+from typing import cast
 
 import pandas as pd
 
+from yquant.backtest.engine import TargetProvider
 from yquant.backtest.walkforward import (
+    ProviderFactory,
     parameter_sensitivity,
     rolling_windows,
     run_walk_forward,
@@ -27,11 +31,11 @@ def _daily_bars(symbols: tuple[str, ...], months: int) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _hold_first_factory(weights: dict[str, float]):
-    def factory(bars: pd.DataFrame):
+def _hold_first_factory(weights: dict[str, float]) -> ProviderFactory:
+    def factory(bars: pd.DataFrame) -> TargetProvider:
         placed = {"done": False}
 
-        def provider(day: date, closes: dict[str, float]) -> TargetPortfolio | None:
+        def provider(day: date, closes: Mapping[str, float]) -> TargetPortfolio | None:
             if placed["done"]:
                 return None
             if not all(closes.get(s, 0.0) > 0 for s in weights):
@@ -95,7 +99,11 @@ def test_stitch_oos_metrics_reports_percentiles() -> None:
     summary = stitch_oos_metrics(windows)
     assert summary["num_windows"] == len(windows)
     assert "annualized_return_pctile" in summary
-    assert set(summary["annualized_return_pctile"]) == {"p10", "p50", "p90"}
+    assert set(cast(dict[str, object], summary["annualized_return_pctile"])) == {
+        "p10",
+        "p50",
+        "p90",
+    }
 
 
 def test_stitch_oos_metrics_handles_no_windows() -> None:
@@ -105,8 +113,8 @@ def test_stitch_oos_metrics_handles_no_windows() -> None:
 def test_parameter_sensitivity_sweeps_values() -> None:
     bars = _daily_bars(("SPY",), months=12)
 
-    def build(weight: float):
-        def provider(day: date, closes: dict[str, float]) -> TargetPortfolio | None:
+    def build(weight: float) -> TargetProvider:
+        def provider(day: date, closes: Mapping[str, float]) -> TargetPortfolio | None:
             if closes.get("SPY", 0.0) <= 0:
                 return None
             return TargetPortfolio(

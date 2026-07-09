@@ -5,6 +5,7 @@ halves the raw price and doubles shares — shows up as a *continuous* adjusted
 series and must not create an equity discontinuity (P4: jump < 0.1%).
 """
 
+from collections.abc import Mapping
 from datetime import date, timedelta
 
 import pandas as pd
@@ -26,7 +27,7 @@ def test_t5_split_leaves_equity_continuous_on_adjusted_prices() -> None:
         day = day + timedelta(days=1)
     bars = pd.DataFrame(rows)
 
-    def provider(d: date, closes: dict[str, float]) -> TargetPortfolio | None:
+    def provider(d: date, closes: Mapping[str, float]) -> TargetPortfolio | None:
         if d == bars["date"].min():
             return TargetPortfolio(
                 as_of=d, weights={"AAPL": 1.0}, layers={"AAPL": "core"}, cash_weight=0.0

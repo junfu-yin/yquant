@@ -8,7 +8,8 @@ sentinel firing a machine-readable invalidation, and the P11 Overlay breach flag
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, time
+from pathlib import Path
 
 import pytest
 
@@ -22,7 +23,13 @@ from yquant.macro.schemas import (
     RiskDashboardItem,
     ThesisProposal,
 )
-from yquant.risk.state_machine import RegimeInputs, RegimeMemory, RegimeState, step
+from yquant.risk.state_machine import (
+    RegimeInputs,
+    RegimeMemory,
+    RegimeReading,
+    RegimeState,
+    step,
+)
 from yquant.strategies.base import TargetPortfolio
 from yquant.ui.viewmodels import (
     PAGE_TITLES,
@@ -40,7 +47,7 @@ from yquant.ui.viewmodels import (
 AS_OF = date(2024, 3, 15)
 
 
-def _reading():
+def _reading() -> RegimeReading:
     memory = RegimeMemory.initial(RegimeState.NEUTRAL)
     _, reading = step(
         memory,
@@ -83,7 +90,7 @@ def _card(symbol: str, severity: int) -> EventCard:
 def _proposal(symbol: str = "AAPL") -> TradeProposal:
     return TradeProposal(
         id=f"{symbol}-1",
-        created_at=AS_OF.isoformat() + "T00:00:00",
+        created_at=datetime.combine(AS_OF, time.min),
         strategy="C1",
         symbol=symbol,
         side="buy",
@@ -371,7 +378,7 @@ def test_demo_payload_wires_the_real_engines() -> None:
     assert any(not r["can_execute"] for r in rows)
 
 
-def test_ui_demo_cli_prints_and_writes_artifact(tmp_path) -> None:
+def test_ui_demo_cli_prints_and_writes_artifact(tmp_path: Path) -> None:
     import json
 
     from yquant.cli import main

@@ -1,5 +1,6 @@
 """T3' halt (06 §2): an order on a halted day gets zero fill and a rejection."""
 
+from collections.abc import Mapping
 from datetime import date
 
 from yquant.backtest import BacktestEngine, Order, run_backtest
@@ -30,7 +31,7 @@ def test_t3_halt_day_in_run_produces_rejection_not_fill() -> None:
         ]
     )
 
-    def provider(day: date, closes: dict[str, float]) -> TargetPortfolio | None:
+    def provider(day: date, closes: Mapping[str, float]) -> TargetPortfolio | None:
         if day == date(2024, 6, 3):
             return TargetPortfolio(
                 as_of=day, weights={"SPY": 1.0}, layers={"SPY": "core"}, cash_weight=0.0

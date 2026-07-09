@@ -308,7 +308,7 @@ def test_regime_job_provider_error_is_recorded_and_alerted(tmp_path: Path) -> No
     sent: list[AlertMessage] = []
     ctx = _context(cfg, sent=sent)
 
-    def _boom(repo: LocalDataRepo, on: date) -> RegimeInputs:
+    def _boom(repo: LocalDataRepo, on_date: date) -> RegimeInputs:
         raise RuntimeError("adapter failed")
 
     ctx.regime_inputs_provider = _boom

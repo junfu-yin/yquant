@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from datetime import date
+from typing import cast
 
 import pandas as pd
 
-from yquant.backtest.engine import run_backtest
+from yquant.backtest.engine import TargetProvider, run_backtest
 from yquant.datasrc.bars import repo_view
 from yquant.datasrc.reconcile import reconcile_daily_bars
 from yquant.qa import (
@@ -29,11 +31,11 @@ from yquant.risk.state_machine import RegimeInputs, replay
 from yquant.strategies.base import TargetPortfolio
 
 
-def _core_provider_factory():
-    def factory():
+def _core_provider_factory() -> Callable[[], TargetProvider]:
+    def factory() -> TargetProvider:
         placed = {"done": False}
 
-        def provider(day: date, closes: dict[str, float]) -> TargetPortfolio | None:
+        def provider(day: date, closes: Mapping[str, float]) -> TargetPortfolio | None:
             if placed["done"] or "SPY" not in closes or "TLT" not in closes:
                 return None
             placed["done"] = True
@@ -104,7 +106,7 @@ def test_p1_conservation_holds_across_a_sell() -> None:
     bars = repo_view(build_golden_bars("2020_covid"))
     sell_after = sorted({d for d in bars["date"]})[3]
 
-    def provider(day: date, closes: dict[str, float]) -> TargetPortfolio | None:
+    def provider(day: date, closes: Mapping[str, float]) -> TargetPortfolio | None:
         if "SPY" not in closes:
             return None
         if day <= sell_after:
@@ -236,13 +238,13 @@ def test_p11_layer_budget_flags_overlay_breach() -> None:
     breach = check_p11_layer_budget({"core": 0.8, "overlay": 0.15})
     assert not breach.passed
     assert breach.severity == "S1"
-    assert "overlay_cap" in breach.detail["violations"]
+    assert "overlay_cap" in cast(list[str], breach.detail["violations"])
 
 
 def test_p11_layer_budget_flags_leverage() -> None:
     lev = check_p11_layer_budget({"core": 0.8, "satellite": 0.3})
     assert not lev.passed
-    assert "leverage" in lev.detail["violations"]
+    assert "leverage" in cast(list[str], lev.detail["violations"])
 
 
 def test_p11_layer_budget_passes_within_caps() -> None:

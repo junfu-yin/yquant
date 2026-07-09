@@ -10,6 +10,7 @@ backtest path here and against the PaperBroker in WP9.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date, timedelta
 
 import pandas as pd
@@ -70,7 +71,7 @@ def test_engine_preserves_core_invariants(
     bars = _bars(paths)
     target = _normalize(weights)
 
-    def provider(day: date, prices: dict[str, float]) -> TargetPortfolio | None:
+    def provider(day: date, prices: Mapping[str, float]) -> TargetPortfolio | None:
         if day != bars["date"].min():
             return None
         return TargetPortfolio(

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from datetime import date, timedelta
 
 import pandas as pd
 import pytest
 
 from yquant.backtest.costs import UsCostModel
-from yquant.backtest.engine import BacktestResult, EquityPoint, run_backtest
+from yquant.backtest.engine import BacktestResult, EquityPoint, TargetProvider, run_backtest
 from yquant.paper.broker import (
     DEFAULT_PAPER_CASH,
     PaperBroker,
@@ -45,11 +46,11 @@ def _bars(closes: dict[str, list[float]]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _provider_factory() -> object:
-    def factory():  # type: ignore[no-untyped-def]
+def _provider_factory() -> Callable[[], TargetProvider]:
+    def factory() -> TargetProvider:
         placed = {"done": False}
 
-        def provider(day: date, prices: dict[str, float]) -> TargetPortfolio | None:
+        def provider(day: date, prices: Mapping[str, float]) -> TargetPortfolio | None:
             if placed["done"] or not prices:
                 return None
             placed["done"] = True
@@ -158,7 +159,7 @@ def test_frozen_session_bypasses_target_provider() -> None:
 
     calls = {"n": 0}
 
-    def provider(day: date, prices: dict[str, float]) -> TargetPortfolio | None:
+    def provider(day: date, prices: Mapping[str, float]) -> TargetPortfolio | None:
         calls["n"] += 1
         return TargetPortfolio(
             as_of=day, weights={"SPY": 0.5}, layers={"SPY": "core"}, cash_weight=0.5
