@@ -566,6 +566,42 @@ def build_parser() -> argparse.ArgumentParser:
         help="optional path to write the JSON paper-book statistics",
     )
 
+    ops = subparsers.add_parser(
+        "ops",
+        help="M-ops: runbook + layered interval-book + owner daily-check (WP11)",
+    )
+    ops_subparsers = ops.add_subparsers(dest="ops_command", required=True)
+    ops_daily = ops_subparsers.add_parser(
+        "daily-check",
+        help="run the deterministic owner five-minute day-check (08 §7)",
+    )
+    ops_daily.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="optional path to write the JSON day-check",
+    )
+    ops_interval = ops_subparsers.add_parser(
+        "interval-book",
+        help="build the first layered interval-book instance from a walk-forward (08 §4)",
+    )
+    ops_interval.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="optional path to write the JSON interval-book",
+    )
+    ops_runbook = ops_subparsers.add_parser(
+        "runbook",
+        help="emit the machine-readable operational runbook and verify alert bindings (08 §7)",
+    )
+    ops_runbook.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="optional path to write the JSON runbook",
+    )
+
     governance = subparsers.add_parser(
         "governance",
         help="M-governance: provider four-piece board + contamination gate (09)",
@@ -671,6 +707,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_ui(args)
     if args.command == "overlay":
         return _run_overlay(args)
+    if args.command == "ops":
+        return _run_ops(args)
     if args.command == "governance":
         return _run_governance(args)
     if args.command == "ledger":
@@ -1578,6 +1616,94 @@ def _run_overlay_paper_book(args: argparse.Namespace) -> int:
             json.dumps(stats.as_dict(), indent=2, ensure_ascii=False), encoding="utf-8"
         )
         print(f"paper_book_artifact: {args.output}")
+    return 0
+
+
+def _run_ops(args: argparse.Namespace) -> int:
+    if args.ops_command == "daily-check":
+        return _run_ops_daily_check(args)
+    if args.ops_command == "interval-book":
+        return _run_ops_interval_book(args)
+    if args.ops_command == "runbook":
+        return _run_ops_runbook(args)
+    return 0
+
+
+def _run_ops_daily_check(args: argparse.Namespace) -> int:
+    import json
+
+    from yquant.ops.daily_check import build_daily_check
+
+    check = build_daily_check()
+    print(f"ops daily-check: owner five-minute review (08 §7, as_of={check.as_of})")
+    for item in check.items:
+        mark = "OK" if item.ok else "!!"
+        ref = f" -> {item.runbook_ref}" if item.runbook_ref else ""
+        print(f"  [{mark}] {item.label}: {item.detail}{ref}")
+    verdict = (
+        "all clear"
+        if check.all_clear
+        else f"{len(check.attention_items)} item(s) need attention"
+    )
+    print(f"verdict: {verdict}")
+
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(
+            json.dumps(check.as_dict(), indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        print(f"daily_check_artifact: {args.output}")
+    return 0
+
+
+def _run_ops_interval_book(args: argparse.Namespace) -> int:
+    import json
+
+    from yquant.ops.interval_book_demo import build_demo_interval_book
+
+    book = build_demo_interval_book()
+    print(
+        f"ops interval-book: layered pre-registered book (08 §4, "
+        f"as_of={book.as_of.isoformat()} version={book.version})"
+    )
+    print(f"num_oos_windows={book.num_oos_windows}")
+    for section in book.layers:
+        print(f"  [{section.kind}] {section.layer} <- {list(section.strategies)}")
+        for band in section.bands:
+            print(f"      {band.metric}: p10={band.p10:.4f} p50={band.p50:.4f} p90={band.p90:.4f}")
+        if section.hard_caps:
+            caps = ", ".join(f"{k}={v:.2%}" for k, v in sorted(section.hard_caps.items()))
+            print(f"      hard_caps: {caps}")
+
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(
+            json.dumps(book.as_dict(), indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        print(f"interval_book_artifact: {args.output}")
+    return 0
+
+
+def _run_ops_runbook(args: argparse.Namespace) -> int:
+    import json
+
+    from yquant.ops.runbook import alert_binding_gaps, build_runbook
+
+    runbook = build_runbook()
+    gaps = alert_binding_gaps(runbook)
+    print("ops runbook: machine-readable operational runbook (08 §7)")
+    for section in runbook.sections:
+        hint = f" [{section.severity_hint}]" if section.severity_hint else ""
+        print(f"  {section.ref}{hint} {section.title}")
+    print(f"alert_binding_gaps: {gaps if gaps else 'none (every alert source resolves)'}")
+
+    if args.output is not None:
+        payload = {"runbook": runbook.as_dict(), "alert_binding_gaps": gaps}
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        print(f"runbook_artifact: {args.output}")
     return 0
 
 
