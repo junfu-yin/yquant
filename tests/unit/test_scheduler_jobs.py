@@ -168,7 +168,7 @@ def test_reconcile_live_job_records_outcome(
     ctx = _context(cfg)
     sources = {
         "yfinance": _FakeSource("yfinance", {"AAPL": _bars("AAPL")}),
-        "stooq": _FakeSource("stooq", {"AAPL": _bars("AAPL")}),
+        "nasdaq": _FakeSource("nasdaq", {"AAPL": _bars("AAPL")}),
     }
     monkeypatch.setattr(jobs, "build_daily_bar_source", lambda name: sources[name])
 

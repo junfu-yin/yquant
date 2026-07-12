@@ -3,7 +3,7 @@
 Status: implementation-side note, not authoritative product docs (`docs/`
 untouched).
 
-Date: 2026-07-06
+Date: 2026-07-12
 
 This describes the layered test suite and the automated quality gates that guard
 the product. The goal is not a coverage number but *behavioural confidence*: the
@@ -13,14 +13,15 @@ system must reliably say "no" to bad data and bad requests.
 
 1. **Unit tests** — pure logic and small collaborators, hermetic (no network,
    no clock dependence). The bulk of the suite.
-2. **Contract tests** — the network-facing normalizers (yfinance/Stooq adapters,
-   macro adapter, EDGAR/probe helpers) exercised against realistic *and*
+2. **Contract tests** — the network-facing normalizers (yfinance/Nasdaq and
+   legacy Stooq adapters, macro adapter, EDGAR/probe helpers) against realistic *and*
    malformed payloads via injected fake modules, so parsing is covered without
    egress.
 3. **Property-based tests** (Hypothesis, `tests/unit/test_property_invariants.py`)
    — invariants over generated inputs: sampling determinism/order-independence,
    retry backoff monotonicity and cap, canonicalization idempotence,
-   reconciliation symmetry, and point-in-time universe correctness.
+   reconciliation symmetry, point-in-time universe correctness, and proposal
+   side/share-count agreement with generated target-weight deltas.
 4. **Integration / end-to-end** (`tests/unit/test_cli_e2e.py`) — drive
    `main(argv)` for every CLI subcommand against a temp config and repo; network
    subcommands use monkeypatched source factories.
@@ -43,28 +44,28 @@ Every push and PR runs, via `.github/workflows/ci.yml`:
 
 `scripts/mutation_check.py` is a small, deterministic harness (no external
 dependency; mutmut's environment model was too awkward here). For each curated
-mutation of `retry.py`, `regime.py`, and `reconcile.py` it patches the source,
+mutation of retry, regime, reconciliation, reporting, and proposal logic it patches the source,
 runs the targeted tests, and requires them to **fail** — a surviving mutant
 means the tests do not actually pin that behaviour. It clears `__pycache__` and
 runs subprocesses with `PYTHONDONTWRITEBYTECODE=1` so same-second rewrites cannot
-load stale bytecode and skew results. Current status: 7/7 mutants killed.
+load stale bytecode and skew results. Current status: 12/12 mutants killed.
 
 To extend: add a `Mutation(...)` entry (module, targeted tests, old→new source,
 label). Prefer mutations that represent plausible bugs (boundary/operator/const).
 
 ## Coverage snapshot
 
-- Total: ~91% (network entrypoints `__main__`/`ui` omitted from the measured
+- Total: 94.97% (network entrypoints `__main__`/Streamlit shell omitted from the measured
   surface; probes/adapters covered via mocked modules).
 - Strong: risk, discipline, ledger, reconcile, repo, security master, macro,
   scheduler jobs.
 
 ## Deliberately out of scope for CI
 
-- **Real live egress** (yfinance/Stooq/EDGAR, real Feishu delivery) — blocked by
-  the sandbox network policy and inherently flaky. Run the live CLI paths
-  (`data update`, `data reconcile-live`, `data update-macro`) manually where
-  egress is open; the normalization logic they exercise is contract-tested.
+- **Real live egress** (yfinance/Nasdaq/EDGAR, real Feishu delivery) remains
+  outside hermetic CI because upstream availability is inherently flaky. The
+  alpha release gate manually ran `data update` and `data reconcile-live` over
+  a fixed recent window; normalization remains contract-tested in CI.
 
 ## How to run locally
 

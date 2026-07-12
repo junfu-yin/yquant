@@ -142,9 +142,9 @@ def build_proposals(
         price = prices.get(symbol)
         if price is None:
             continue
-        target_value = target * portfolio_value
+        trade_value = abs(delta) * portfolio_value
         shares = suggested_shares(
-            target_value,
+            trade_value,
             price,
             lot_size=lot_sizes.get(symbol, 1),
             allow_fractional=allow_fractional,
@@ -164,7 +164,10 @@ def build_proposals(
                 position_rule=position_rule,
                 invalidation_condition=metadata.invalidation_condition,
                 red_team_note=metadata.red_team_note,
-                reason=f"{strategy}: target weight {target:.4f} vs current {current:.4f}",
+                reason=(
+                    f"{strategy}: target weight {target:.4f} vs current {current:.4f} "
+                    f"(delta {delta:+.4f})"
+                ),
                 related_events=related_events.get(symbol, []),
                 status="pending",
             )

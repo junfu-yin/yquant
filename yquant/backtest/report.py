@@ -12,7 +12,7 @@ the ledger and UI can persist it verbatim (07 replay).
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal
@@ -28,6 +28,13 @@ _COST_TIERS: tuple[tuple[str, str], ...] = (
     ("0x", "0"),
     ("1x", "1"),
     ("2x", "2"),
+)
+
+TargetProviderFactory = Callable[[], TargetProvider]
+
+_ALPHA_EXECUTION_WARNING = (
+    "alpha: backtests use same-session adjusted-close fills; treat performance as "
+    "research-only until T+1 open execution is wired"
 )
 
 
@@ -129,7 +136,7 @@ def _buy_and_hold_provider(symbol: str) -> TargetProvider:
 def build_report(
     *,
     bars: pd.DataFrame,
-    target_provider: TargetProvider,
+    target_provider_factory: TargetProviderFactory,
     initial_cash: float,
     cost_model: UsCostModel | None = None,
     instruments: Mapping[str, Instrument] | None = None,
@@ -147,15 +154,17 @@ def build_report(
 
     base_model = cost_model or UsCostModel()
     instruments = instruments or {}
-    warnings: list[str] = []
+    warnings: list[str] = [_ALPHA_EXECUTION_WARNING]
+
+    providers = _fresh_providers(target_provider_factory, len(_COST_TIERS))
 
     cost_tiers: list[dict[str, object]] = []
     strategy_result_1x: BacktestResult | None = None
-    for label, factor in _COST_TIERS:
+    for (label, factor), provider in zip(_COST_TIERS, providers, strict=True):
         model = scale_cost_model(base_model, Decimal(factor))
         result = run_backtest(
             bars=bars,
-            target_provider=target_provider,
+            target_provider=provider,
             initial_cash=initial_cash,
             cost_model=model,
             instruments=instruments,
@@ -199,6 +208,26 @@ def build_report(
             for r in strategy_result_1x.rejections
         ],
     }
+
+
+def _fresh_providers(
+    factory: TargetProviderFactory,
+    count: int,
+) -> list[TargetProvider]:
+    """Build distinct providers so state cannot leak between report tiers."""
+
+    providers: list[TargetProvider] = []
+    identities: set[int] = set()
+    for _ in range(count):
+        provider = factory()
+        if not callable(provider):
+            raise TypeError("target_provider_factory must return a callable TargetProvider")
+        identity = id(provider)
+        if identity in identities:
+            raise ValueError("target_provider_factory must return a fresh provider per run")
+        identities.add(identity)
+        providers.append(provider)
+    return providers
 
 
 def _run_benchmark(

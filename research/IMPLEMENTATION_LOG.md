@@ -385,3 +385,59 @@ Remaining implementation debt:
 - Real security-master / macro source feeds behind adapters.
 - Automatic risk-regime computation from stored macro inside the scheduler.
 - Daemon retry evidence and alert de-duplication.
+
+## 2026-07-12 - v0.1.0-alpha.1 Release Candidate
+
+Baseline:
+- Head before this pass: `400d7c5`.
+- Release contract: private, single-user, shadow-only alpha; no broker orders
+  and no claim that research/demo outputs are actionable.
+
+Release-blocking fixes:
+- Changed `build_report` to require a target-provider factory and construct a
+  distinct provider for every 0x/1x/2x cost run. It now rejects factories that
+  return the same instance, preventing stateful signal consumption from making
+  the 1x headline report silently all-cash.
+- Changed proposal sizing from full target value to the absolute
+  target-minus-current delta. Added fixed cases for initial buys, partial adds,
+  partial reductions, and full exits plus a 100-example Hypothesis invariant.
+- Added the same-session adjusted-close alpha warning to every report while
+  T-close to T+1-open execution remains future release work.
+
+Live-source correction:
+- The first live P3 run exposed that `pandas-datareader 0.11.1` removed its
+  Stooq securities reader, making the configured backup fail deterministically.
+- Added a Nasdaq historical-JSON daily-bar adapter with HTTP/API error handling,
+  numeric cleanup, empty-response handling, source factory integration, and
+  contract tests. Nasdaq is now the alpha default backup/reconciliation source;
+  the legacy Stooq adapter remains available.
+
+Release surface:
+- Set package version `0.1.0a1` and release tag metadata
+  `v0.1.0-alpha.1`; `doctor` reports `alpha` and `shadow-only`.
+- Replaced the placeholder README with install, operation, test, and limitation
+  guidance. Added `research/RELEASE_V0_1_ALPHA.md` as the release/promotion gate.
+- Extended curated mutation testing from 10 to 12 mutants so both fixed P0s are
+  guarded against regression.
+
+Verification:
+- `ruff check .`: passed.
+- `mypy yquant tests`: passed (182 source files).
+- `pytest --cov=yquant --cov-fail-under=90`: 603 passed, 94.97% coverage.
+- `python scripts/mutation_check.py`: 12/12 mutants killed.
+- `python scripts/chaos_drill.py`: 4/4 scenarios handled gracefully.
+- `poetry check --lock`: passed; Poetry emitted only migration/deprecation
+  warnings for the existing `[tool.poetry]` layout.
+- Built `yquant-0.1.0a1-py3-none-any.whl`, installed it in an isolated venv,
+  and confirmed the installed console script reports `yquant 0.1.0a1`.
+- Live yfinance update, 2026-06-29..2026-07-10: AAPL/MSFT/SPY each returned 9
+  rows and wrote a manifest/quality artifact.
+- Live yfinance/Nasdaq P3 reconciliation (seed 7): AAPL/MSFT, 18 compared rows,
+  zero fetch failures/missing rows/mismatches, consistency 1.000000.
+- SPY backtest on the fetched window: every cost tier executed one fill and the
+  report displayed the alpha research-only execution warning.
+
+Known alpha limits:
+- T+1-open execution, independent paper/backtest parity, real M9 pillar
+  derivation, real historical golden windows, live holdings import, and
+  production UI wiring remain v0.1 promotion work.

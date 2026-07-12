@@ -4,11 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from yquant.datasrc.adapters import StooqDailyBarSource, YFinanceDailyBarSource
+from yquant.datasrc.adapters import (
+    NasdaqDailyBarSource,
+    StooqDailyBarSource,
+    YFinanceDailyBarSource,
+)
 from yquant.datasrc.protocols import DailyBarSource
 
 _FACTORIES: dict[str, Callable[[], DailyBarSource]] = {
     "yfinance": YFinanceDailyBarSource,
+    "nasdaq": NasdaqDailyBarSource,
     "stooq": StooqDailyBarSource,
 }
 

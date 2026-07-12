@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "yquant"
-version = "0.1.0"
+version = "0.1.0a1"
 description = "Local US equity research copilot and discipline engine."
 authors = ["Junfu Yin <junfu.yin@gmail.com>"]
 readme = "README.md"

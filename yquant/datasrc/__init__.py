@@ -1,6 +1,10 @@
 """Data source adapters and repository interfaces for the US execution market."""
 
-from yquant.datasrc.adapters import StooqDailyBarSource, YFinanceDailyBarSource
+from yquant.datasrc.adapters import (
+    NasdaqDailyBarSource,
+    StooqDailyBarSource,
+    YFinanceDailyBarSource,
+)
 from yquant.datasrc.artifacts import read_report_artifact, write_report_artifact
 from yquant.datasrc.freshness import (
     DailyBarFreshnessReport,
@@ -25,6 +29,7 @@ __all__ = [
     "DailyBarsUpdater",
     "DataManifest",
     "LocalDataRepo",
+    "NasdaqDailyBarSource",
     "ReconciliationReport",
     "RetryPolicy",
     "SampledLiveReconciliationReport",

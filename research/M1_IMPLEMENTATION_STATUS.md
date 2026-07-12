@@ -5,7 +5,7 @@ Status: implementation-side note, not authoritative product docs.
 ## Current Scope
 
 M1 currently covers US daily bars only:
-- yfinance primary and Stooq backup normalizers.
+- yfinance primary and Nasdaq backup normalizers; Stooq remains a legacy adapter.
 - Canonical raw/adjusted OHLC storage.
 - Local Parquet-backed `LocalDataRepo`.
 - JSONL manifests for written daily-bar slices.
@@ -31,17 +31,17 @@ Manual daily-bar update:
 python -m yquant data update --symbols AAPL,MSFT,SPY --start 2024-01-01 --end 2024-01-31
 ```
 
-Compare persisted yfinance vs Stooq rows:
+Compare persisted yfinance vs Nasdaq rows:
 ```powershell
 python -m yquant data reconcile --symbols AAPL,MSFT --start 2024-01-01 --end 2024-01-31
 ```
 
-Sample symbols and reconcile fresh live yfinance vs Stooq fetches (P3 evidence):
+Sample symbols and reconcile fresh live yfinance vs Nasdaq fetches (P3 evidence):
 ```powershell
 python -m yquant data reconcile-live --symbols AAPL,MSFT,SPY --start 2024-01-02 --end 2024-01-12 --sample-size 2 --seed 7
 ```
 (Omit `--symbols` to sample from the stored repo universe on `--on-date`,
-defaulting to `--end`. Requires network egress to yfinance and Stooq.)
+defaulting to `--end`. Requires network egress to yfinance and Nasdaq.)
 
 Check local freshness with an explicit deadline:
 ```powershell
@@ -79,7 +79,7 @@ python -m yquant schedule run          # start the blocking daemon
 ## Test Coverage
 
 Current M1 tests cover:
-- yfinance/Stooq normalization.
+- yfinance/Nasdaq normalization plus legacy Stooq contract coverage.
 - Raw vs adjusted read views.
 - Manifest hash stability.
 - Parquet round trip and upsert.
@@ -103,13 +103,16 @@ Testing layers (see `TESTING_STRATEGY.md`):
 - Unit + contract (mocked network) + property-based (Hypothesis) + CLI
   end-to-end + adversarial traps.
 - A deterministic mutation check (`scripts/mutation_check.py`) on core logic;
-  7/7 mutants killed.
+  12/12 mutants killed.
 
 Latest verification:
-- `python -m pytest`: 228 passed; coverage ~91% (CI floor 90%).
+- `python -m pytest`: 603 passed; coverage 94.97% (CI floor 90%).
 - `python -m ruff check .`: passed.
 - `python -m mypy yquant tests`: passed.
-- `python scripts/mutation_check.py`: 7/7 killed.
+- `python scripts/mutation_check.py`: 12/12 killed.
+- Live alpha smoke: yfinance updated AAPL/MSFT/SPY (9 rows each); sampled
+  yfinance/Nasdaq reconciliation compared 18 AAPL/MSFT rows at 100% consistency
+  with no missing rows or fetch failures.
 - CI (GitHub Actions) runs lint, types, tests+coverage, and the mutation check
   on every push and PR.
 

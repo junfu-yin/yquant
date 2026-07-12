@@ -9,7 +9,7 @@ def test_load_example_config() -> None:
     assert cfg.runtime.timezone == "America/New_York"
     assert cfg.data.markets == ("us",)
     assert cfg.data.primary_source == "yfinance"
-    assert cfg.data.backup_sources == ("stooq",)
+    assert cfg.data.backup_sources == ("nasdaq",)
     assert cfg.data.history_start == date(2010, 1, 1)
     assert cfg.llm.daily_budget_alert_usd is None
     assert cfg.risk.core_budget == 0.75

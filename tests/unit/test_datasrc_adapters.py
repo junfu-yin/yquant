@@ -8,8 +8,10 @@ import pandas as pd
 import pytest
 
 from yquant.datasrc.adapters import (
+    NasdaqDailyBarSource,
     StooqDailyBarSource,
     YFinanceDailyBarSource,
+    normalize_nasdaq_daily_bars,
     normalize_stooq_daily_bars,
     normalize_yfinance_daily_bars,
 )
@@ -80,6 +82,50 @@ def test_normalize_missing_column_raises() -> None:
         normalize_stooq_daily_bars(raw, "AAPL")
 
 
+def test_normalize_nasdaq_cleans_numbers_and_sorts_ascending() -> None:
+    raw = pd.DataFrame(
+        [
+            {
+                "date": "07/10/2026",
+                "close": "$315.32",
+                "volume": "34,132,320",
+                "open": "$314.72",
+                "high": "$316.91",
+                "low": "$312.17",
+            },
+            {
+                "date": "07/09/2026",
+                "close": "$316.22",
+                "volume": "48,124,490",
+                "open": "$310.51",
+                "high": "$316.53",
+                "low": "$308.16",
+            },
+        ]
+    )
+
+    out = normalize_nasdaq_daily_bars(raw, "aapl")
+
+    assert out["date"].tolist() == [date(2026, 7, 9), date(2026, 7, 10)]
+    assert out["close_raw"].tolist() == [316.22, 315.32]
+    assert out["volume"].tolist() == [48_124_490, 34_132_320]
+    assert set(out["source"]) == {"nasdaq"}
+
+
+def test_normalize_nasdaq_empty_rows_returns_canonical_empty_frame() -> None:
+    out = normalize_nasdaq_daily_bars(pd.DataFrame(), "AAPL")
+    assert out.empty
+    assert "close_raw" in out.columns
+
+
+def test_normalize_nasdaq_missing_column_raises() -> None:
+    raw = pd.DataFrame(
+        [{"date": "07/10/2026", "open": "$1", "high": "$2", "low": "$1"}]
+    )
+    with pytest.raises(ValueError, match="missing required columns"):
+        normalize_nasdaq_daily_bars(raw, "AAPL")
+
+
 def test_yfinance_source_fetches_via_mocked_module(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
@@ -113,8 +159,95 @@ def test_stooq_source_fetches_via_mocked_reader(monkeypatch: pytest.MonkeyPatch)
     assert out["source"].iloc[0] == "stooq"
 
 
+def test_nasdaq_source_fetches_via_mocked_http(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+    payload = {
+        "data": {
+            "tradesTable": {
+                "rows": [
+                    {
+                        "date": "07/10/2026",
+                        "close": "$315.32",
+                        "volume": "34,132,320",
+                        "open": "$314.72",
+                        "high": "$316.91",
+                        "low": "$312.17",
+                    }
+                ]
+            }
+        },
+        "status": {"rCode": 200},
+    }
+
+    class Response:
+        status_code = 200
+
+        def json(self) -> dict[str, object]:
+            return payload
+
+    def _get(url: str, **kwargs: object) -> Response:
+        captured.update({"url": url, **kwargs})
+        return Response()
+
+    fake = types.ModuleType("requests")
+    fake.get = _get  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "requests", fake)
+
+    out = NasdaqDailyBarSource().fetch_daily_bars(
+        "aapl", date(2026, 7, 1), date(2026, 7, 10)
+    )
+
+    assert str(captured["url"]).endswith("/AAPL/historical")
+    assert captured["timeout"] == 30
+    params = captured["params"]
+    assert isinstance(params, dict)
+    assert params["fromdate"] == "2026-07-01"
+    assert params["todate"] == "2026-07-10"
+    assert out["source"].iloc[0] == "nasdaq"
+
+
+def test_nasdaq_source_surfaces_api_level_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Response:
+        status_code = 200
+
+        def json(self) -> dict[str, object]:
+            return {
+                "data": None,
+                "status": {
+                    "rCode": 400,
+                    "bCodeMessage": [{"errorMessage": "bad date"}],
+                },
+            }
+
+    fake = types.ModuleType("requests")
+    fake.get = lambda *args, **kwargs: Response()  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "requests", fake)
+
+    with pytest.raises(ValueError, match="bad date"):
+        NasdaqDailyBarSource().fetch_daily_bars(
+            "AAPL", date(2026, 7, 1), date(2026, 7, 10)
+        )
+
+
+def test_nasdaq_source_surfaces_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Response:
+        status_code = 429
+
+        def json(self) -> dict[str, object]:
+            return {}
+
+    fake = types.ModuleType("requests")
+    fake.get = lambda *args, **kwargs: Response()  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "requests", fake)
+
+    with pytest.raises(RuntimeError, match="HTTP 429"):
+        NasdaqDailyBarSource().fetch_daily_bars(
+            "AAPL", date(2026, 7, 1), date(2026, 7, 10)
+        )
+
+
 def test_adapters_unimplemented_methods_raise() -> None:
-    for source in (YFinanceDailyBarSource(), StooqDailyBarSource()):
+    for source in (YFinanceDailyBarSource(), NasdaqDailyBarSource(), StooqDailyBarSource()):
         with pytest.raises(NotImplementedError):
             source.fetch_stock_list()
         with pytest.raises(NotImplementedError):

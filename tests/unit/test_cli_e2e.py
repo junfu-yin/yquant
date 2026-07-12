@@ -95,9 +95,14 @@ freshness_cron = "45 17 * * 1-5"
     return config_path
 
 
-def test_doctor_runs(tmp_path: Path) -> None:
+def test_doctor_runs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     cfg = _write_config(tmp_path)
     assert main(["doctor", "--config", str(cfg)]) == 0
+    output = capsys.readouterr().out
+    assert "yquant: 0.1.0a1" in output
+    assert "release_tag: v0.1.0-alpha.1" in output
+    assert "release_channel: alpha" in output
+    assert "execution_mode: shadow-only" in output
 
 
 def test_no_command_prints_help() -> None:
@@ -123,7 +128,7 @@ def test_update_then_freshness_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 def test_reconcile_cli_on_seeded_repo(tmp_path: Path) -> None:
     cfg = _write_config(tmp_path)
     repo = LocalDataRepo(tmp_path / "parquet")
-    repo.write_daily_bars(pd.concat([_bars("AAPL", "yfinance"), _bars("AAPL", "stooq")]))
+    repo.write_daily_bars(pd.concat([_bars("AAPL", "yfinance"), _bars("AAPL", "nasdaq")]))
 
     assert main(
         ["data", "reconcile", "--config", str(cfg), "--symbols", "AAPL",
@@ -246,8 +251,12 @@ def test_backtest_cli_runs_and_writes_report(
 
     report = json.loads(out_path.read_text(encoding="utf-8"))
     assert report["benchmark"]["symbol"] == "SPY"
-    tiers = [row["tier"] for row in report["cost_sensitivity"]]
-    assert tiers == ["0x", "1x", "2x"]
+    tiers = report["cost_sensitivity"]
+    assert [row["tier"] for row in tiers] == ["0x", "1x", "2x"]
+    assert all(row["metrics"]["num_fills"] == 1 for row in tiers)
+    assert report["strategy"]["metrics"]["num_fills"] == 1
+    assert report["strategy"]["metrics"]["total_return"] > 0.0
+    assert any("research-only" in warning for warning in report["warnings"])
 
 
 def test_backtest_cli_errors_on_empty_repo(tmp_path: Path) -> None:

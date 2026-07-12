@@ -38,7 +38,7 @@ from yquant.scheduler.jobs import (
     run_reconcile_live_job,
     run_update_job,
 )
-from yquant.version import __version__
+from yquant.version import EXECUTION_MODE, RELEASE_CHANNEL, __release_tag__, __version__
 
 if TYPE_CHECKING:
     from yquant.backtest import TargetProvider
@@ -151,7 +151,7 @@ def build_parser() -> argparse.ArgumentParser:
     data_reconcile.add_argument("--start", required=True, help="inclusive start date, YYYY-MM-DD")
     data_reconcile.add_argument("--end", required=True, help="inclusive end date, YYYY-MM-DD")
     data_reconcile.add_argument("--left-source", default="yfinance")
-    data_reconcile.add_argument("--right-source", default="stooq")
+    data_reconcile.add_argument("--right-source", default="nasdaq")
     data_reconcile.add_argument("--price-column", default="close_raw")
     data_reconcile.add_argument("--tolerance-bps", type=float, default=10.0)
     data_reconcile.add_argument("--minimum-consistency-rate", type=float, default=0.995)
@@ -197,7 +197,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="random seed for reproducible sampling evidence",
     )
     data_reconcile_live.add_argument("--left-source", default="yfinance")
-    data_reconcile_live.add_argument("--right-source", default="stooq")
+    data_reconcile_live.add_argument("--right-source", default="nasdaq")
     data_reconcile_live.add_argument("--price-column", default="close_raw")
     data_reconcile_live.add_argument("--tolerance-bps", type=float, default=10.0)
     data_reconcile_live.add_argument("--minimum-consistency-rate", type=float, default=0.995)
@@ -678,6 +678,9 @@ def _doctor(config_path: Path) -> int:
     feishu_present = bool(os.getenv(cfg.notification.feishu.webhook_env))
 
     print(f"yquant: {__version__}")
+    print(f"release_tag: {__release_tag__}")
+    print(f"release_channel: {RELEASE_CHANNEL}")
+    print(f"execution_mode: {EXECUTION_MODE}")
     print(f"config: {config_path}")
     print(f"timezone: {cfg.runtime.timezone}")
     print(f"data_dir: {cfg.runtime.data_dir}")
@@ -1222,7 +1225,7 @@ def _run_backtest(args: argparse.Namespace) -> int:
     )
     report = build_report(
         bars=bars,
-        target_provider=_static_target_provider(weights),
+        target_provider_factory=lambda: _static_target_provider(weights),
         initial_cash=args.initial_cash,
         cost_model=cost_model,
         instruments=instruments,

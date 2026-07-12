@@ -142,6 +142,8 @@ def test_data_reconcile_cli_writes_quality_artifact(tmp_path: Path) -> None:
             "2024-01-31",
             "--quality-dir",
             str(quality_dir),
+            "--right-source",
+            "stooq",
         ]
     )
 
@@ -177,7 +179,7 @@ def test_data_reconcile_live_parser_accepts_sampling_options() -> None:
     assert args.sample_size == 2
     assert args.seed == 13
     assert args.left_source == "yfinance"
-    assert args.right_source == "stooq"
+    assert args.right_source == "nasdaq"
 
 
 def test_schedule_parser_accepts_run_once_job() -> None:
@@ -214,7 +216,7 @@ def test_data_reconcile_live_cli_writes_quality_artifact(
 ) -> None:
     fakes = {
         "yfinance": _FakeCliSource("yfinance", {"AAPL": _bars("AAPL", "yfinance")}),
-        "stooq": _FakeCliSource("stooq", {"AAPL": _bars("AAPL", "stooq")}),
+        "nasdaq": _FakeCliSource("nasdaq", {"AAPL": _bars("AAPL", "nasdaq")}),
     }
     monkeypatch.setattr(cli, "_daily_bar_source", lambda name: fakes[name])
 
@@ -273,9 +275,9 @@ def test_parse_deadline_utc_handles_z_suffix() -> None:
 
 
 def test_daily_bar_sources_deduplicates_configured_sources() -> None:
-    sources = _daily_bar_sources(["yfinance", "stooq", "YFINANCE"])
+    sources = _daily_bar_sources(["yfinance", "nasdaq", "stooq", "YFINANCE"])
 
-    assert [source.name for source in sources] == ["yfinance", "stooq"]
+    assert [source.name for source in sources] == ["yfinance", "nasdaq", "stooq"]
 
 
 def _bars(symbol: str, source: str) -> pd.DataFrame:

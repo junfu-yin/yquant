@@ -60,7 +60,9 @@ def test_t0_zero_cost_tier_matches_index_exactly_bar_the_rounding() -> None:
     closes = [100.0, 120.0]
     bars = _spy_bars(closes)
     report = build_report(
-        bars=bars, target_provider=_buy_and_hold("SPY"), initial_cash=100_000.0
+        bars=bars,
+        target_provider_factory=lambda: _buy_and_hold("SPY"),
+        initial_cash=100_000.0,
     )
     tiers = {
         row["tier"]: row["metrics"]
@@ -72,3 +74,5 @@ def test_t0_zero_cost_tier_matches_index_exactly_bar_the_rounding() -> None:
     # Fees only reduce return: 0x >= 1x >= 2x.
     assert tiers["0x"]["final_equity"] >= tiers["1x"]["final_equity"]
     assert tiers["1x"]["final_equity"] >= tiers["2x"]["final_equity"]
+    assert all(tier["num_fills"] == 1 for tier in tiers.values())
+    assert tiers["1x"]["total_return"] > 0.0

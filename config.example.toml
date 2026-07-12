@@ -10,7 +10,7 @@ log_dir = "data/logs"
 # v3.1a execution scope: US stocks and US-listed ETFs only.
 markets = ["us"]
 primary_source = "yfinance"
-backup_sources = ["stooq"]
+backup_sources = ["nasdaq"]
 history_start = "2010-01-01"
 
 [llm]

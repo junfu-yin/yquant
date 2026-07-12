@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Any, cast
 
 import pandas as pd
+import pytest
 
 from yquant.backtest import build_report, run_backtest
 from yquant.backtest.costs import UsCostModel
@@ -96,7 +97,9 @@ def test_metrics_of_reports_curve_bounds() -> None:
 def test_build_report_has_all_sections_and_ordered_tiers() -> None:
     bars = _bars(("SPY", "QQQ"))
     report = build_report(
-        bars=bars, target_provider=_hold_first({"SPY": 0.6, "QQQ": 0.4}), initial_cash=100_000.0
+        bars=bars,
+        target_provider_factory=lambda: _hold_first({"SPY": 0.6, "QQQ": 0.4}),
+        initial_cash=100_000.0,
     )
 
     assert set(report) == {
@@ -115,12 +118,33 @@ def test_build_report_has_all_sections_and_ordered_tiers() -> None:
         for row in cast(list[dict[str, Any]], report["cost_sensitivity"])
     ]
     assert finals[0] >= finals[1] >= finals[2]
+    tier_metrics = [
+        row["metrics"] for row in cast(list[dict[str, Any]], report["cost_sensitivity"])
+    ]
+    assert all(metrics["num_fills"] == 2 for metrics in tier_metrics)
+    strategy = cast(dict[str, Any], report["strategy"])
+    assert strategy["metrics"] == tier_metrics[1]
+    assert any("research-only" in warning for warning in cast(list[str], report["warnings"]))
+
+
+def test_build_report_rejects_factory_that_reuses_stateful_provider() -> None:
+    bars = _bars(("SPY",))
+    shared = _hold_first({"SPY": 1.0})
+
+    with pytest.raises(ValueError, match="fresh provider"):
+        build_report(
+            bars=bars,
+            target_provider_factory=lambda: shared,
+            initial_cash=100_000.0,
+        )
 
 
 def test_build_report_warns_when_benchmark_absent() -> None:
     bars = _bars(("QQQ",))  # no SPY
     report = build_report(
-        bars=bars, target_provider=_hold_first({"QQQ": 1.0}), initial_cash=100_000.0
+        bars=bars,
+        target_provider_factory=lambda: _hold_first({"QQQ": 1.0}),
+        initial_cash=100_000.0,
     )
     assert report["benchmark"] is None
     assert any("SPY" in w for w in cast(list[str], report["warnings"]))
@@ -131,7 +155,9 @@ def test_build_report_is_json_serialisable() -> None:
 
     bars = _bars(("SPY", "QQQ"))
     report = build_report(
-        bars=bars, target_provider=_hold_first({"SPY": 0.6, "QQQ": 0.4}), initial_cash=100_000.0
+        bars=bars,
+        target_provider_factory=lambda: _hold_first({"SPY": 0.6, "QQQ": 0.4}),
+        initial_cash=100_000.0,
     )
     # Round-trips cleanly -> safe for the ledger/UI.
     assert json.loads(json.dumps(report)) == report

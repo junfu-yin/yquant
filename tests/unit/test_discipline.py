@@ -18,7 +18,7 @@ from yquant.discipline.risk_rules import (
     is_in_cooldown,
     triggers_cooldown,
 )
-from yquant.strategies.base import TargetPortfolio
+from yquant.strategies.base import Layer, TargetPortfolio
 
 
 def test_single_name_cap_blocks_oversized_buy() -> None:
@@ -142,6 +142,54 @@ def test_build_proposals_diffs_weights() -> None:
     assert prop.red_team_note.startswith("Momentum")
     assert prop.suggested_shares == 50  # 0.10 * 100k / 200
     assert prop.status == "pending"
+
+
+@pytest.mark.parametrize(
+    ("current", "target", "side", "expected_shares"),
+    [
+        (0.00, 0.10, "buy", 50),
+        (0.05, 0.10, "buy", 25),
+        (0.10, 0.05, "sell", 25),
+        (0.10, 0.00, "sell", 50),
+    ],
+)
+def test_build_proposals_uses_incremental_weight_for_share_count(
+    current: float,
+    target: float,
+    side: str,
+    expected_shares: int,
+) -> None:
+    weights = {"AAPL": target} if target > 0 else {}
+    layers: dict[str, Layer] = {"AAPL": "satellite"} if target > 0 else {}
+    controlled = TargetPortfolio(
+        as_of=date(2024, 6, 3),
+        weights=weights,
+        layers=layers,
+        cash_weight=1.0 - target,
+    )
+
+    proposals = build_proposals(
+        controlled,
+        current_weights={"AAPL": current},
+        prices={"AAPL": 200.0},
+        portfolio_value=100_000.0,
+        strategy="regression",
+        position_rule="incremental shares",
+        min_weight_change=0.0,
+        proposal_metadata={
+            "AAPL": ProposalMetadata(
+                invalidation_condition="AAPL < 180",
+                red_team_note="The signal may reverse.",
+                requested_layer="satellite",
+            )
+        },
+        now=datetime(2024, 6, 3, 9, 0),
+    )
+
+    assert len(proposals) == 1
+    assert proposals[0].side == side
+    assert proposals[0].suggested_shares == expected_shares
+    assert f"delta {target - current:+.4f}" in proposals[0].reason
 
 
 def test_build_proposals_supports_explicit_lot_size_flooring() -> None:

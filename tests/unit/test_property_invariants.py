@@ -8,11 +8,12 @@ universe correctness.
 
 from __future__ import annotations
 
+import math
 import random
 from datetime import UTC, date, datetime, timedelta
 
 import pandas as pd
-from hypothesis import given, settings
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
 from yquant.datasrc.bars import canonicalize_daily_bars, make_daily_bars_frame, normalize_symbols
@@ -20,6 +21,8 @@ from yquant.datasrc.reconcile import reconcile_daily_bars
 from yquant.datasrc.reconcile_live import sample_symbols
 from yquant.datasrc.retry import RetryPolicy
 from yquant.datasrc.security_master import listed_symbols_on, security_master_from_records
+from yquant.discipline.proposals import ProposalMetadata, build_proposals
+from yquant.strategies.base import Layer, TargetPortfolio
 
 _TICKERS = st.text(alphabet="ABCDEFGH", min_size=1, max_size=4)
 _PRICES = st.floats(min_value=2.0, max_value=1000.0, allow_nan=False, allow_infinity=False)
@@ -140,3 +143,50 @@ def test_point_in_time_universe_respects_listing_and_delisting(
     not_delisted = (not has_delisting) or (on_date + timedelta(days=delisting_offset) > on_date)
     expected = listed and not_delisted
     assert ("AAA" in universe) is expected
+
+
+@settings(max_examples=100, deadline=None)
+@given(
+    current=st.floats(min_value=0.0, max_value=1.0, allow_nan=False),
+    target=st.floats(min_value=0.0, max_value=1.0, allow_nan=False),
+    price=st.floats(min_value=1.0, max_value=2_000.0, allow_nan=False),
+    portfolio_value=st.floats(min_value=1_000.0, max_value=1_000_000.0, allow_nan=False),
+)
+def test_proposal_shares_and_side_follow_weight_delta(
+    current: float,
+    target: float,
+    price: float,
+    portfolio_value: float,
+) -> None:
+    assume(abs(target - current) > 1e-6)
+    weights = {"AAA": target} if target > 0 else {}
+    layers: dict[str, Layer] = {"AAA": "satellite"} if target > 0 else {}
+    controlled = TargetPortfolio(
+        as_of=date(2024, 6, 3),
+        weights=weights,
+        layers=layers,
+        cash_weight=1.0 - target,
+    )
+    proposals = build_proposals(
+        controlled,
+        current_weights={"AAA": current},
+        prices={"AAA": price},
+        portfolio_value=portfolio_value,
+        strategy="property",
+        position_rule="delta invariant",
+        min_weight_change=0.0,
+        proposal_metadata={
+            "AAA": ProposalMetadata(
+                invalidation_condition="AAA < 1",
+                red_team_note="Generated invariant case.",
+                requested_layer="satellite",
+            )
+        },
+    )
+
+    assert len(proposals) == 1
+    proposal = proposals[0]
+    assert proposal.side == ("buy" if target > current else "sell")
+    assert proposal.suggested_shares == math.floor(
+        abs(target - current) * portfolio_value / price
+    )

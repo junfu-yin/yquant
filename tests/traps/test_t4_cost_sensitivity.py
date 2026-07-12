@@ -40,7 +40,9 @@ def _provider(bars: pd.DataFrame) -> TargetProvider:
 def test_t4_three_cost_tiers_are_present_and_ordered() -> None:
     bars = _bars()
     report = build_report(
-        bars=bars, target_provider=_provider(bars), initial_cash=100_000.0
+        bars=bars,
+        target_provider_factory=lambda: _provider(bars),
+        initial_cash=100_000.0,
     )
 
     tiers = cast(list[dict[str, Any]], report["cost_sensitivity"])
@@ -52,12 +54,15 @@ def test_t4_three_cost_tiers_are_present_and_ordered() -> None:
     assert finals[0] >= finals[1] >= finals[2]
     # 0x really is costless; 1x and 2x pay strictly more here (there are fills).
     assert finals[0] > finals[2]
+    assert all(row["metrics"]["num_fills"] == 2 for row in tiers)
 
 
 def test_t4_report_carries_all_mandatory_fields() -> None:
     bars = _bars()
     report = build_report(
-        bars=bars, target_provider=_provider(bars), initial_cash=100_000.0
+        bars=bars,
+        target_provider_factory=lambda: _provider(bars),
+        initial_cash=100_000.0,
     )
 
     for key in (

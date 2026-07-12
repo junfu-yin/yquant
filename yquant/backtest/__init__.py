@@ -20,6 +20,7 @@ from yquant.backtest.engine import (
 )
 from yquant.backtest.report import (
     PerformanceMetrics,
+    TargetProviderFactory,
     annualized_return,
     build_report,
     metrics_of,
@@ -45,6 +46,7 @@ __all__ = [
     "Rejection",
     "Side",
     "TargetProvider",
+    "TargetProviderFactory",
     "UsCostModel",
     "WalkForwardWindow",
     "annualized_return",

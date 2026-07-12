@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time
 from typing import Any
 
+from yquant.backtest.engine import TargetProvider
 from yquant.backtest.report import build_report
 from yquant.brief.schemas import EventCard
 from yquant.datasrc.bars import repo_view
@@ -223,19 +224,23 @@ def _demo_backtest_report() -> dict[str, Any]:
         "GLD": "satellite",
         "QQQ": "overlay",
     }
-    placed = {"done": False}
 
-    def provider(day: date, closes: Mapping[str, float]) -> TargetPortfolio | None:
-        if placed["done"] or not all(symbol in closes for symbol in weights):
-            return None
-        placed["done"] = True
-        return TargetPortfolio(
-            as_of=day, weights=dict(weights), layers=dict(layers), cash_weight=0.12
-        )
+    def provider_factory() -> TargetProvider:
+        placed = {"done": False}
+
+        def provider(day: date, closes: Mapping[str, float]) -> TargetPortfolio | None:
+            if placed["done"] or not all(symbol in closes for symbol in weights):
+                return None
+            placed["done"] = True
+            return TargetPortfolio(
+                as_of=day, weights=dict(weights), layers=dict(layers), cash_weight=0.12
+            )
+
+        return provider
 
     return build_report(
         bars=bars,
-        target_provider=provider,
+        target_provider_factory=provider_factory,
         initial_cash=50_000.0,
         benchmark_symbol="SPY",
     )

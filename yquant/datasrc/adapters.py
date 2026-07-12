@@ -56,6 +56,51 @@ class StooqDailyBarSource:
         raise NotImplementedError("EDGAR adapter owns announcements")
 
 
+class NasdaqDailyBarSource:
+    """Secondary US daily-bar source using Nasdaq's historical JSON endpoint."""
+
+    name = "nasdaq"
+    endpoint = "https://api.nasdaq.com/api/quote/{symbol}/historical"
+
+    def fetch_daily_bars(self, symbol: str, start: date, end: date) -> pd.DataFrame:
+        requests = importlib.import_module("requests")
+        get = _required_callable(requests, "get")
+        response = get(
+            self.endpoint.format(symbol=symbol.strip().upper()),
+            params={
+                "assetclass": "stocks",
+                "fromdate": start.isoformat(),
+                "todate": end.isoformat(),
+                "limit": 5_000,
+            },
+            headers={
+                "Accept": "application/json, text/plain, */*",
+                "Referer": "https://www.nasdaq.com/",
+                "User-Agent": "yquant/0.1 shadow-reconciliation",
+            },
+            timeout=30,
+        )
+        status_code = int(getattr(response, "status_code", 0))
+        if status_code >= 400:
+            raise RuntimeError(f"Nasdaq HTTP {status_code}")
+
+        payload = cast(dict[str, Any], response.json())
+        api_status = cast(dict[str, Any], payload.get("status") or {})
+        if int(api_status.get("rCode", 200)) != 200:
+            raise ValueError(_nasdaq_api_error(api_status))
+
+        data = cast(dict[str, Any], payload.get("data") or {})
+        table = cast(dict[str, Any], data.get("tradesTable") or {})
+        rows = cast(list[dict[str, Any]], table.get("rows") or [])
+        return normalize_nasdaq_daily_bars(pd.DataFrame(rows), symbol)
+
+    def fetch_stock_list(self, include_delisted: bool = True) -> pd.DataFrame:
+        raise NotImplementedError("Nasdaq stock-list adapter is not part of alpha daily bars")
+
+    def fetch_announcements(self, symbol: str, start: date, end: date) -> pd.DataFrame:
+        raise NotImplementedError("EDGAR adapter owns announcements")
+
+
 def normalize_yfinance_daily_bars(frame: pd.DataFrame, symbol: str) -> pd.DataFrame:
     """Normalize yfinance output with raw and adjusted prices dual-stored."""
 
@@ -99,6 +144,52 @@ def normalize_stooq_daily_bars(frame: pd.DataFrame, symbol: str) -> pd.DataFrame
         source="stooq",
         adj_factor=pd.Series(1.0, index=source.index),
     )
+
+
+def normalize_nasdaq_daily_bars(frame: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    """Normalize Nasdaq JSON rows, including currency/comma-formatted numbers."""
+
+    expected = ("date", "open", "high", "low", "close", "volume")
+    if frame.empty:
+        source = pd.DataFrame(columns=list(expected))
+    else:
+        source = frame.rename(columns={column: str(column).strip().lower() for column in frame})
+        missing = set(expected) - set(source.columns)
+        if missing:
+            raise ValueError(f"Nasdaq response missing required columns: {sorted(missing)}")
+        source = source.loc[:, list(expected)].copy()
+
+    source["date"] = pd.to_datetime(source["date"], format="%m/%d/%Y", errors="coerce").dt.date
+    for column in ("open", "high", "low", "close", "volume"):
+        source[column] = _nasdaq_number(source[column])
+    source = source.dropna(subset=list(expected)).reset_index(drop=True)
+
+    return make_daily_bars_frame(
+        symbol=symbol,
+        market="us",
+        dates=source["date"],
+        raw_open=source["open"],
+        raw_high=source["high"],
+        raw_low=source["low"],
+        raw_close=source["close"],
+        volume=source["volume"],
+        source="nasdaq",
+        adj_factor=pd.Series(1.0, index=source.index),
+    )
+
+
+def _nasdaq_number(series: pd.Series) -> pd.Series:
+    cleaned = series.astype("string").str.replace(r"[$,]", "", regex=True).str.strip()
+    return cast(pd.Series, pd.to_numeric(cleaned, errors="coerce"))
+
+
+def _nasdaq_api_error(status: dict[str, Any]) -> str:
+    messages = status.get("bCodeMessage") or []
+    if isinstance(messages, list):
+        details = [str(item.get("errorMessage")) for item in messages if isinstance(item, dict)]
+        if details:
+            return f"Nasdaq API error: {'; '.join(details)}"
+    return f"Nasdaq API error: rCode={status.get('rCode')}"
 
 
 def _prepare_source_frame(frame: pd.DataFrame) -> pd.DataFrame:

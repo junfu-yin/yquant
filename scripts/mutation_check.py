@@ -114,6 +114,20 @@ MUTATIONS: list[Mutation] = [
         "RegimeState.CRISIS: 1.0,",
         "redline R4: crisis stops clearing overlay",
     ),
+    Mutation(
+        "yquant/backtest/report.py",
+        ["tests/unit/test_backtest_report.py", "tests/traps/test_t0_backtest_smoke.py"],
+        "providers = _fresh_providers(target_provider_factory, len(_COST_TIERS))",
+        "providers = [target_provider_factory()] * len(_COST_TIERS)",
+        "report: cost tiers reuse stateful provider",
+    ),
+    Mutation(
+        "yquant/discipline/proposals.py",
+        ["tests/unit/test_discipline.py", "tests/unit/test_property_invariants.py"],
+        "trade_value = abs(delta) * portfolio_value",
+        "trade_value = target * portfolio_value",
+        "proposal: target shares replace incremental shares",
+    ),
 ]
 
 

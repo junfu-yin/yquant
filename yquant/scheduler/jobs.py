@@ -189,7 +189,7 @@ def run_reconcile_live_job(ctx: JobContext, *, on_date: date | None = None) -> J
         )
 
     left_name = ctx.config.data.primary_source
-    right_name = ctx.config.data.backup_sources[0] if ctx.config.data.backup_sources else "stooq"
+    right_name = ctx.config.data.backup_sources[0] if ctx.config.data.backup_sources else "nasdaq"
     try:
         report = run_sampled_live_reconciliation(
             build_daily_bar_source(left_name),
