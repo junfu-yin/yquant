@@ -6,6 +6,7 @@ import importlib
 import os
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlparse
 
 from yquant.config import AppConfig
 from yquant.notify.alerts import AlertMessage
@@ -18,9 +19,17 @@ class FeishuNotifier:
     """Post plain-text alerts to a Feishu custom-bot webhook."""
 
     def __init__(self, webhook_url: str, *, transport: Transport | None = None) -> None:
-        if not webhook_url.strip():
+        normalized_url = webhook_url.strip()
+        if not normalized_url:
             raise ValueError("webhook_url must not be empty")
-        self.webhook_url = webhook_url
+        parsed = urlparse(normalized_url)
+        if parsed.scheme != "https" or not parsed.netloc:
+            raise ValueError("webhook_url must be a valid HTTPS URL")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("webhook_url must not contain embedded credentials")
+        if parsed.fragment:
+            raise ValueError("webhook_url must not contain a fragment")
+        self.webhook_url = normalized_url
         self._transport = transport or _requests_transport
 
     def send(self, message: AlertMessage) -> None:

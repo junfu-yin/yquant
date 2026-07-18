@@ -165,8 +165,12 @@ class BacktestEngine:
         trading_dates: Sequence[date],
         cost_model: UsCostModel | None = None,
     ) -> None:
-        if initial_cash < 0:
-            raise ValueError("initial_cash must be non-negative")
+        if not math.isfinite(initial_cash) or initial_cash < 0:
+            raise ValueError("initial_cash must be finite and non-negative")
+        if len(set(trading_dates)) != len(trading_dates):
+            raise ValueError("trading_dates must not contain duplicates")
+        if trading_dates != sorted(trading_dates):
+            raise ValueError("trading_dates must be sorted in ascending order")
         self.settled_cash = float(initial_cash)
         self.positions: dict[str, int] = {}
         self.gfv_count = 0
@@ -174,8 +178,10 @@ class BacktestEngine:
         self.rejections: list[Rejection] = []
         self._unsettled: list[_Settlement] = []
         self._model = cost_model or UsCostModel()
-        self._dates = list(trading_dates)
-        self._index = {d: i for i, d in enumerate(self._dates)}
+        self._dates: list[date] = list(trading_dates)
+        self._index: dict[date, int] = {
+            trading_day: index for index, trading_day in enumerate(self._dates)
+        }
 
     def unsettled_total(self) -> float:
         return sum(item.amount for item in self._unsettled)
@@ -216,7 +222,11 @@ class BacktestEngine:
 
         if is_halted:
             return self._reject(order, day, "halted")
-        if order.shares <= 0 or price <= 0:
+        if order.side not in ("buy", "sell"):
+            return self._reject(order, day, "invalid_side")
+        if order.instrument not in ("etf", "single_stock"):
+            return self._reject(order, day, "invalid_instrument")
+        if order.shares <= 0 or not math.isfinite(price) or price <= 0:
             return self._reject(order, day, "non_positive")
         if order.side == "buy":
             return self._buy(order, day, price)
@@ -326,6 +336,8 @@ def run_backtest(
     freed proceeds can fund buys (and correctly trigger a GFV when unsettled).
     """
 
+    if not math.isfinite(min_weight_change) or min_weight_change < 0:
+        raise ValueError("min_weight_change must be finite and non-negative")
     instruments = instruments or {}
     frame = _prepare_bars(bars)
     trading_dates = sorted({row_date for row_date in frame["date"].tolist()})
@@ -391,6 +403,11 @@ def step_session(
 
     target = target_provider(day, closes_today)
     if target is not None:
+        if target.as_of != day:
+            raise ValueError(
+                f"target portfolio as_of {target.as_of.isoformat()} does not match "
+                f"session {day.isoformat()}"
+            )
         _rebalance(
             engine,
             target=target,
@@ -467,10 +484,23 @@ def _prepare_bars(bars: pd.DataFrame) -> pd.DataFrame:
         raise ValueError(f"bars missing required columns: {sorted(missing)}")
     frame = bars.loc[:, [c for c in ("symbol", "date", "close", "is_halted") if c in bars.columns]]
     frame = frame.copy()
-    frame["symbol"] = frame["symbol"].astype(str)
-    frame["date"] = pd.to_datetime(frame["date"]).dt.date
+    frame["symbol"] = frame["symbol"].astype(str).str.strip().str.upper()
+    frame["date"] = pd.to_datetime(frame["date"], errors="raise").dt.date
+    frame["close"] = pd.to_numeric(frame["close"], errors="coerce")
+    if frame["symbol"].eq("").any():
+        raise ValueError("bars contain an empty symbol")
+    if frame["close"].isna().any() or not frame["close"].map(math.isfinite).all():
+        raise ValueError("bars contain non-finite close prices")
+    if (frame["close"] <= 0).any():
+        raise ValueError("bars contain non-positive close prices")
+    duplicates = frame.duplicated(["symbol", "date"], keep=False)
+    if duplicates.any():
+        raise ValueError("bars contain duplicate symbol/date rows")
     if "is_halted" not in frame.columns:
         frame["is_halted"] = False
+    else:
+        frame["is_halted"] = frame["is_halted"].fillna(False).astype(bool)
+    frame = frame.sort_values(["date", "symbol"]).reset_index(drop=True)
     return frame
 
 

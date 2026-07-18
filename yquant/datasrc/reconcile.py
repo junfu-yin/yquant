@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import date
 
@@ -33,9 +34,11 @@ class ReconciliationReport:
 
     @property
     def consistency_rate(self) -> float:
-        if self.compared_rows == 0:
+        total_rows = self.compared_rows + self.missing_left_rows + self.missing_right_rows
+        if total_rows == 0:
             return 0.0
-        return (self.compared_rows - len(self.mismatches)) / self.compared_rows
+        matching_rows = self.compared_rows - len(self.mismatches)
+        return matching_rows / total_rows
 
     @property
     def passed(self) -> bool:
@@ -54,16 +57,28 @@ def reconcile_daily_bars(
 ) -> ReconciliationReport:
     """Compare two canonical daily-bar frames on symbol/date close values."""
 
-    if tolerance_bps < 0:
-        raise ValueError("tolerance_bps must be non-negative")
-    if not 0.0 <= minimum_consistency_rate <= 1.0:
-        raise ValueError("minimum_consistency_rate must be in [0, 1]")
+    if not math.isfinite(tolerance_bps) or tolerance_bps < 0:
+        raise ValueError("tolerance_bps must be finite and non-negative")
+    if (
+        not math.isfinite(minimum_consistency_rate)
+        or not 0.0 <= minimum_consistency_rate <= 1.0
+    ):
+        raise ValueError("minimum_consistency_rate must be finite and in [0, 1]")
 
     left_bars = canonicalize_daily_bars(left)
     right_bars = canonicalize_daily_bars(right)
     for frame_name, frame in (("left", left_bars), ("right", right_bars)):
         if price_column not in frame.columns:
             raise ValueError(f"{frame_name} daily bars missing price column: {price_column}")
+        if frame.duplicated(["symbol", "date"]).any():
+            raise ValueError(f"{frame_name} daily bars contain duplicate symbol/date rows")
+        prices = pd.to_numeric(frame[price_column], errors="coerce")
+        if (
+            prices.isna().any()
+            or not prices.map(math.isfinite).all()
+            or (prices <= 0).any()
+        ):
+            raise ValueError(f"{frame_name} daily bars contain invalid prices")
 
     if left_bars.empty and right_bars.empty:
         return ReconciliationReport(

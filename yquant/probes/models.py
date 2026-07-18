@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import platform
 import sys
+import tempfile
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -94,7 +96,19 @@ def write_probe_run(run: ProbeRun, output_dir: str | Path) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     path = directory / f"{timestamp}_{run.probe_name}.json"
-    with path.open("w", encoding="utf-8") as fh:
-        json.dump(asdict(run), fh, ensure_ascii=False, indent=2)
-        fh.write("\n")
+    fd, raw_temp_path = tempfile.mkstemp(
+        dir=directory,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    os.close(fd)
+    temp_path = Path(raw_temp_path)
+    try:
+        temp_path.write_text(
+            json.dumps(asdict(run), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temp_path, path)
+    finally:
+        temp_path.unlink(missing_ok=True)
     return path

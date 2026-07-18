@@ -7,6 +7,7 @@ budget and instrument rules. Confidence never overrides these caps.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -44,6 +45,24 @@ class OverlayGuardrailConfig:
             }
         )
     )
+
+    def __post_init__(self) -> None:
+        caps = (
+            self.overlay_cap,
+            self.overlay_single_cap,
+            self.leveraged_2x_total_cap,
+            self.leveraged_2x_single_cap,
+        )
+        if not all(math.isfinite(cap) and 0 < cap <= 1 for cap in caps):
+            raise ValueError("overlay caps must be finite and in (0, 1]")
+        if self.overlay_single_cap > self.overlay_cap:
+            raise ValueError("overlay_single_cap must not exceed overlay_cap")
+        if self.leveraged_2x_total_cap > self.overlay_cap:
+            raise ValueError("leveraged_2x_total_cap must not exceed overlay_cap")
+        if self.leveraged_2x_single_cap > self.leveraged_2x_total_cap:
+            raise ValueError(
+                "leveraged_2x_single_cap must not exceed leveraged_2x_total_cap"
+            )
 
 
 @dataclass(frozen=True)
@@ -93,8 +112,28 @@ def validate_overlay_request(
     """
 
     config = config or OverlayGuardrailConfig()
-    ticker = symbol.upper()
+    ticker = symbol.strip().upper()
     violations: list[OverlayViolation] = []
+    numeric_exposures = (
+        exposure.overlay_weight_after,
+        exposure.symbol_weight_after,
+        exposure.leveraged_2x_weight_after,
+    )
+    if not ticker:
+        violations.append(
+            OverlayViolation(
+                rule="invalid_symbol",
+                detail={"symbol": ticker, "kind": instrument_kind, "cap": None},
+            )
+        )
+    if not all(math.isfinite(value) and value >= 0 for value in numeric_exposures):
+        violations.append(
+            OverlayViolation(
+                rule="invalid_exposure",
+                detail={"symbol": ticker, "kind": instrument_kind, "cap": None},
+            )
+        )
+        return violations
 
     if (
         instrument_kind == "leveraged_2x_long"

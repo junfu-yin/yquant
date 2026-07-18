@@ -10,6 +10,7 @@ over time and are out of this module's scope.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -164,12 +165,29 @@ def check_p4_adjusted_price_continuity(
     ``absolute_floor`` (so a genuinely flat series is never flagged).
     """
 
+    if (
+        not math.isfinite(baseline_multiple)
+        or baseline_multiple <= 0
+        or not math.isfinite(absolute_floor)
+        or absolute_floor < 0
+    ):
+        raise ValueError("P4 thresholds must be finite and valid")
     series = sorted(adjusted_closes, key=lambda item: item[0])
+    normalized: list[tuple[date, float]] = []
+    invalid_dates: list[str] = []
+    for day, close in series:
+        try:
+            numeric_close = float(close)
+        except (TypeError, ValueError):
+            invalid_dates.append(day.isoformat())
+            continue
+        if not math.isfinite(numeric_close) or numeric_close <= 0:
+            invalid_dates.append(day.isoformat())
+            continue
+        normalized.append((day, numeric_close))
     events = set(event_dates)
     returns: list[tuple[date, float]] = []
-    for (_, prev_close), (day, close) in zip(series, series[1:], strict=False):
-        if prev_close <= 0:
-            continue
+    for (_, prev_close), (day, close) in zip(normalized, normalized[1:], strict=False):
         returns.append((day, abs(close / prev_close - 1.0)))
 
     non_event = sorted(r for day, r in returns if day not in events)
@@ -184,13 +202,14 @@ def check_p4_adjusted_price_continuity(
     return MetricResult(
         metric="P4",
         name="adjusted-price continuity",
-        passed=not jumps,
+        passed=not jumps and not invalid_dates,
         severity="block",
         detail={
             "baseline_move": round(baseline, 6),
             "ceiling": round(ceiling, 6),
             "event_dates": [d.isoformat() for d in sorted(events)],
             "discontinuities": jumps,
+            "invalid_price_dates": invalid_dates,
         },
     )
 
@@ -283,14 +302,23 @@ def check_p11_layer_budget(
     block for the long-only v1 book.
     """
 
-    overlay = float(layer_weights.get("overlay", 0.0))
-    total = sum(float(w) for w in layer_weights.values())
+    values = {str(layer): float(weight) for layer, weight in layer_weights.items()}
+    overlay = values.get("overlay", 0.0)
+    total = sum(values.values())
     violations: list[str] = []
-    if overlay > overlay_cap + 1e-9:
+    if not math.isfinite(overlay_cap) or not 0 <= overlay_cap <= 1:
+        raise ValueError("overlay_cap must be finite and in [0, 1]")
+    if not values or any(not math.isfinite(weight) or weight < 0 for weight in values.values()):
+        violations.append("invalid_weight")
+    elif overlay > overlay_cap + 1e-9:
         violations.append("overlay_cap")
-    if total > 1.0 + 1e-9:
+    if math.isfinite(total) and total > 1.0 + 1e-9:
         violations.append("leverage")
-    severity = "S1" if "overlay_cap" in violations or "leverage" in violations else "info"
+    severity = (
+        "S1"
+        if any(rule in violations for rule in ("invalid_weight", "overlay_cap", "leverage"))
+        else "info"
+    )
     return MetricResult(
         metric="P11",
         name="layer-budget compliance",
@@ -301,6 +329,6 @@ def check_p11_layer_budget(
             "overlay_cap": overlay_cap,
             "total_weight": round(total, 6),
             "violations": violations,
-            "layers": {k: round(float(v), 6) for k, v in layer_weights.items()},
+            "layers": {k: round(v, 6) for k, v in values.items()},
         },
     )

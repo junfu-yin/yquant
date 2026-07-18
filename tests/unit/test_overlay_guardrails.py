@@ -88,3 +88,16 @@ def test_3x_and_inverse_are_rejected() -> None:
         "icebox_ticker",
         "inverse_not_allowed",
     }
+
+
+def test_non_finite_exposure_is_rejected() -> None:
+    violations = validate_overlay_request(
+        symbol="NVDA",
+        instrument_kind="ordinary",
+        exposure=OverlayExposure(
+            overlay_weight_after=float("nan"),
+            symbol_weight_after=0.01,
+        ),
+    )
+
+    assert [violation.rule for violation in violations] == ["invalid_exposure"]

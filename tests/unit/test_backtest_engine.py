@@ -106,9 +106,26 @@ def test_negative_initial_cash_rejected() -> None:
         BacktestEngine(initial_cash=-1.0, trading_dates=[date(2024, 6, 3)])
 
 
+def test_non_finite_initial_cash_rejected() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        BacktestEngine(initial_cash=float("nan"), trading_dates=[date(2024, 6, 3)])
+
+
 def test_run_backtest_requires_close_column() -> None:
     bars = pd.DataFrame([{"symbol": "SPY", "date": date(2024, 6, 3)}])
     with pytest.raises(ValueError, match="missing required columns"):
+        run_backtest(bars=bars, target_provider=_hold_first("SPY"), initial_cash=1_000.0)
+
+
+def test_run_backtest_rejects_duplicate_symbol_date() -> None:
+    bars = pd.concat([_linear_bars("SPY", [100.0]), _linear_bars("SPY", [101.0])])
+    with pytest.raises(ValueError, match="duplicate"):
+        run_backtest(bars=bars, target_provider=_hold_first("SPY"), initial_cash=1_000.0)
+
+
+def test_run_backtest_rejects_non_finite_close() -> None:
+    bars = _linear_bars("SPY", [float("nan")])
+    with pytest.raises(ValueError, match="non-finite"):
         run_backtest(bars=bars, target_provider=_hold_first("SPY"), initial_cash=1_000.0)
 
 

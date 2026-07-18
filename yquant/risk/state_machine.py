@@ -23,6 +23,7 @@ machine availability): a data gap never manufactures a regime change.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date
@@ -84,13 +85,22 @@ class RegimeConfig:
     confirm_periods: int = 2
 
     def __post_init__(self) -> None:
-        missing = set(PILLARS) - set(self.weights)
-        if missing:
-            raise ValueError(f"weights missing pillars: {sorted(missing)}")
-        if any(w <= 0 for w in self.weights.values()):
-            raise ValueError("all pillar weights must be positive")
+        actual = set(self.weights)
+        expected = set(PILLARS)
+        if actual != expected:
+            raise ValueError(
+                f"weights must contain exactly the five pillars; "
+                f"missing={sorted(expected - actual)}, extra={sorted(actual - expected)}"
+            )
+        if any(not math.isfinite(w) or w <= 0 for w in self.weights.values()):
+            raise ValueError("all pillar weights must be finite and positive")
         if abs(sum(self.weights.values()) - 1.0) > 1e-9:
             raise ValueError("pillar weights must sum to 1")
+        if not all(
+            math.isfinite(threshold)
+            for threshold in (self.risk_on_at, self.risk_off_at, self.crisis_at)
+        ):
+            raise ValueError("regime thresholds must be finite")
         if not (self.crisis_at < self.risk_off_at < self.risk_on_at):
             raise ValueError("thresholds must satisfy crisis_at < risk_off_at < risk_on_at")
         if self.confirm_periods < 1:
@@ -304,14 +314,43 @@ def score_pillars(
 
     scores: dict[str, int] = {}
     stale: list[str] = []
+    invalid = _non_finite_pillars(inputs)
     for name in PILLARS:
-        value = _SCORERS[name](inputs)
+        value = None if name in invalid else _SCORERS[name](inputs)
         if value is None:
             stale.append(name)
             scores[name] = last_scores.get(name, 0)
         else:
             scores[name] = value
     return scores, sorted(stale)
+
+
+def _non_finite_pillars(inputs: RegimeInputs) -> set[str]:
+    fields = {
+        TREND: (
+            inputs.spy_close,
+            inputs.spy_ma_10m,
+            inputs.pct_sectors_above_200d,
+        ),
+        CREDIT: (
+            inputs.hy_oas_percentile,
+            inputs.hy_oas_change_3m_bp,
+            inputs.hyg_lqd_z,
+        ),
+        VOLATILITY: (inputs.vix_level, inputs.vix_term_inversion_days),
+        BREADTH: (inputs.rsp_spy_trend_slope, inputs.pct_above_200d),
+        MACRO_LIQUIDITY: (
+            inputs.nfci,
+            inputs.nfci_change,
+            inputs.curve_10y_3m,
+            inputs.usd_change_3m,
+        ),
+    }
+    return {
+        pillar
+        for pillar, values in fields.items()
+        if any(value is not None and not math.isfinite(float(value)) for value in values)
+    }
 
 
 def weighted_composite(scores: Mapping[str, int], config: RegimeConfig) -> float:

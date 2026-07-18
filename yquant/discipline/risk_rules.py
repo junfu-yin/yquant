@@ -9,6 +9,7 @@ execution checklist.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Literal
@@ -26,6 +27,20 @@ class DisciplineConfig:
     drawdown_strong: float = 0.15
     consecutive_loss_limit: int = 3
     cooldown_trading_days: int = 3
+
+    def __post_init__(self) -> None:
+        ratios = (
+            self.single_name_cap,
+            self.industry_cap,
+            self.drawdown_alert,
+            self.drawdown_strong,
+        )
+        if not all(math.isfinite(value) and 0 < value <= 1 for value in ratios):
+            raise ValueError("discipline ratios must be finite and in (0, 1]")
+        if self.drawdown_alert >= self.drawdown_strong:
+            raise ValueError("drawdown_alert must be below drawdown_strong")
+        if self.consecutive_loss_limit <= 0 or self.cooldown_trading_days <= 0:
+            raise ValueError("discipline count thresholds must be positive")
 
 
 @dataclass(frozen=True)
@@ -58,8 +73,13 @@ def check_position_caps(
     Sells never breach caps (they reduce exposure), so only buys are checked.
     """
 
+    if side not in ("buy", "sell"):
+        raise ValueError("side must be 'buy' or 'sell'")
     if side == "sell":
         return []
+    values = (prospective_weight, industry_weight_after)
+    if not all(math.isfinite(value) and value >= 0 for value in values):
+        raise ValueError("prospective weights must be finite and non-negative")
     violations: list[RuleViolation] = []
     if prospective_weight > config.single_name_cap:
         violations.append(
@@ -94,8 +114,12 @@ def check_drawdown(
 ) -> list[RuleViolation]:
     """Drawdown gate: block *adding* (buy) beyond the strong line; warn past alert."""
 
+    if side not in ("buy", "sell"):
+        raise ValueError("side must be 'buy' or 'sell'")
     if side == "sell":
         return []
+    if not math.isfinite(state.drawdown) or not 0 <= state.drawdown <= 1:
+        raise ValueError("drawdown must be finite and in [0, 1]")
     if state.drawdown >= config.drawdown_strong:
         return [
             RuleViolation(
@@ -125,6 +149,8 @@ def triggers_cooldown(state: DisciplineState, config: DisciplineConfig) -> bool:
     """Whether the last N realised trades are all losses (cooldown trigger)."""
 
     limit = config.consecutive_loss_limit
+    if any(not math.isfinite(pnl) for pnl in state.recent_trade_pnl):
+        raise ValueError("recent trade P&L values must be finite")
     if len(state.recent_trade_pnl) < limit:
         return False
     return all(pnl < 0 for pnl in state.recent_trade_pnl[-limit:])

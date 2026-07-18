@@ -29,7 +29,11 @@ from typing import Any, Literal
 import pandas as pd
 
 from yquant.backtest.walkforward import run_walk_forward, stitch_oos_metrics
-from yquant.strategies.adapters import make_dual_momentum_provider
+from yquant.strategies.adapters import (
+    make_dual_momentum_provider,
+    make_sector_momentum_provider,
+)
+from yquant.strategies.satellite import GICS_SECTOR_ETFS
 
 LayerKind = Literal["numeric", "observing"]
 
@@ -134,6 +138,30 @@ def _core_oos_summary(bars: pd.DataFrame, *, initial_cash: float) -> dict[str, A
     return stitch_oos_metrics(windows)
 
 
+def _satellite_rule_oos_summary(
+    bars: pd.DataFrame,
+    *,
+    initial_cash: float,
+) -> dict[str, Any]:
+    """Run an independent S-A sector-momentum walk-forward."""
+
+    sector_bars = bars.loc[bars["symbol"].astype(str).isin(GICS_SECTOR_ETFS)].copy()
+    if sector_bars.empty:
+        return {"num_windows": 0, "windows": []}
+
+    def factory(window_bars: pd.DataFrame) -> Any:
+        return make_sector_momentum_provider(window_bars)
+
+    windows = run_walk_forward(
+        bars=sector_bars,
+        provider_factory=factory,
+        initial_cash=initial_cash,
+        is_months=24,
+        oos_months=12,
+    )
+    return stitch_oos_metrics(windows)
+
+
 def build_interval_book(
     bars: pd.DataFrame,
     *,
@@ -148,8 +176,10 @@ def build_interval_book(
     overlay carry process metrics and ``observing`` bands per ADR-23/24.
     """
 
-    summary = _core_oos_summary(bars, initial_cash=initial_cash)
-    core_bands = bands_from_oos(summary)
+    core_summary = _core_oos_summary(bars, initial_cash=initial_cash)
+    satellite_summary = _satellite_rule_oos_summary(bars, initial_cash=initial_cash)
+    core_bands = bands_from_oos(core_summary)
+    satellite_bands = bands_from_oos(satellite_summary)
 
     core = LayerIntervalBook(
         layer="core",
@@ -170,10 +200,16 @@ def build_interval_book(
         layer="satellite_rule",
         strategies=("S-A",),
         kind="numeric",
-        bands=core_bands,  # S-A shares the rule-strategy OOS treatment.
-        process_metrics={"rebalance": "monthly sector-momentum"},
+        bands=satellite_bands,
+        process_metrics={
+            "rebalance": "monthly sector-momentum",
+            "sample": (
+                f"independent out-of-sample walk-forward, "
+                f"{int(satellite_summary.get('num_windows', 0))} windows"
+            ),
+        },
         hard_caps={"single_name": 0.05},
-        note="S-A 为规则型，与核心层同口径给区间。",
+        note="S-A 为规则型，使用其自身行业动量样本外窗口计算区间。",
     )
     satellite_llm = LayerIntervalBook(
         layer="satellite_llm",
@@ -206,6 +242,6 @@ def build_interval_book(
     return IntervalBook(
         as_of=as_of,
         version=version,
-        num_oos_windows=int(summary.get("num_windows", 0)),
+        num_oos_windows=int(core_summary.get("num_windows", 0)),
         layers=(core, satellite_rule, satellite_llm, overlay),
     )

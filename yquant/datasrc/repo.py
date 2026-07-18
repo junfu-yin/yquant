@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import fcntl
+import os
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal
@@ -38,6 +43,9 @@ class LocalDataRepo:
         self.manifest_path = self.parquet_dir / "manifests" / "daily_bars.jsonl"
         self.security_master_path = self.parquet_dir / "security_master.parquet"
         self.macro_series_path = self.parquet_dir / "macro_series.parquet"
+        self._daily_bars_lock = self.parquet_dir / ".daily_bars.lock"
+        self._security_master_lock = self.parquet_dir / ".security_master.lock"
+        self._macro_series_lock = self.parquet_dir / ".macro_series.lock"
 
     def write_daily_bars(self, frame: pd.DataFrame) -> DataManifest:
         """Validate, upsert, and persist canonical daily bars."""
@@ -46,24 +54,27 @@ class LocalDataRepo:
         report = check_daily_bars(bars)
         report.raise_for_errors()
 
-        existing = self._read_daily_bars_storage()
-        combined = pd.concat([existing, bars], ignore_index=True) if not existing.empty else bars
-        combined = canonicalize_daily_bars(combined)
-        combined = combined.sort_values(["symbol", "date", "source", "asof"])
-        combined = combined.drop_duplicates(["symbol", "date", "source"], keep="last")
-        combined = canonicalize_daily_bars(combined)
+        with _exclusive_lock(self._daily_bars_lock):
+            existing = self._read_daily_bars_storage()
+            combined = (
+                pd.concat([existing, bars], ignore_index=True) if not existing.empty else bars
+            )
+            combined = canonicalize_daily_bars(combined)
+            combined = combined.sort_values(["symbol", "date", "source", "asof"])
+            combined = combined.drop_duplicates(
+                ["symbol", "date", "source", "asof"], keep="last"
+            )
+            combined = canonicalize_daily_bars(combined)
+            _atomic_write_parquet(combined, self.daily_bars_path)
 
-        self.daily_bars_path.parent.mkdir(parents=True, exist_ok=True)
-        combined.to_parquet(self.daily_bars_path, index=False)
-
-        source = _single_source_or_mixed(bars)
-        manifest = build_manifest(
-            bars,
-            dataset="daily_bars",
-            source=source,
-            storage_path=self.daily_bars_path,
-        )
-        append_manifest(self.manifest_path, manifest)
+            source = _single_source_or_mixed(bars)
+            manifest = build_manifest(
+                bars,
+                dataset="daily_bars",
+                source=source,
+                storage_path=self.daily_bars_path,
+            )
+            append_manifest(self.manifest_path, manifest)
         return manifest
 
     def get_bars(
@@ -78,7 +89,7 @@ class LocalDataRepo:
         if end < start:
             raise ValueError("end must be on or after start")
         wanted = set(normalize_symbols(symbols))
-        storage = self._read_daily_bars_storage()
+        storage = _current_daily_view(self._read_daily_bars_storage())
         if storage.empty or not wanted:
             return repo_view(storage, adjust)
 
@@ -100,10 +111,8 @@ class LocalDataRepo:
         reading at a past instant never sees data — including late corrections —
         that had not yet arrived. This is the lookahead guard for replay.
 
-        Note: storage keeps a single (latest) version per symbol/date/source, so
-        a correction overwrites its prior value. This guard therefore prevents
-        seeing future-recorded rows but cannot reconstruct an overwritten earlier
-        version; full bitemporal history is future work.
+        Storage keeps revisions by ``asof`` and collapses them only after applying
+        the cutoff, so a replay can reconstruct the latest version known then.
         """
 
         if end < start:
@@ -122,7 +131,8 @@ class LocalDataRepo:
             & (dates <= end)
             & (asof <= cutoff)
         )
-        return repo_view(storage.loc[mask].copy(), adjust)
+        visible = _current_daily_view(storage.loc[mask].copy())
+        return repo_view(visible, adjust)
 
     def get_daily_bars_storage(
         self,
@@ -137,7 +147,7 @@ class LocalDataRepo:
         if end < start:
             raise ValueError("end must be on or after start")
         wanted = set(normalize_symbols(symbols))
-        storage = self._read_daily_bars_storage()
+        storage = _latest_daily_by_asof(self._read_daily_bars_storage())
         if storage.empty or not wanted:
             return storage
 
@@ -152,8 +162,8 @@ class LocalDataRepo:
         """Validate and persist the canonical security master (full replace)."""
 
         master = canonicalize_security_master(frame)
-        self.security_master_path.parent.mkdir(parents=True, exist_ok=True)
-        master.to_parquet(self.security_master_path, index=False)
+        with _exclusive_lock(self._security_master_lock):
+            _atomic_write_parquet(master, self.security_master_path)
         return master
 
     def get_security_master(self) -> pd.DataFrame:
@@ -167,13 +177,15 @@ class LocalDataRepo:
         """Validate, upsert, and persist canonical macro/index series rows."""
 
         incoming = canonicalize_macro_series(frame)
-        existing = self._read_macro_series()
-        combined = (
-            pd.concat([existing, incoming], ignore_index=True) if not existing.empty else incoming
-        )
-        combined = canonicalize_macro_series(combined)
-        self.macro_series_path.parent.mkdir(parents=True, exist_ok=True)
-        combined.to_parquet(self.macro_series_path, index=False)
+        with _exclusive_lock(self._macro_series_lock):
+            existing = self._read_macro_series()
+            combined = (
+                pd.concat([existing, incoming], ignore_index=True)
+                if not existing.empty
+                else incoming
+            )
+            combined = canonicalize_macro_series(combined)
+            _atomic_write_parquet(combined, self.macro_series_path)
         return incoming
 
     def get_macro_series(
@@ -255,7 +267,7 @@ class LocalDataRepo:
             market_filter = None if market == "all" else market
             return listed_symbols_on(master, on_date, market=market_filter)
 
-        storage = self._read_daily_bars_storage()
+        storage = _latest_daily_by_asof(self._read_daily_bars_storage())
         if storage.empty:
             return []
 
@@ -293,3 +305,55 @@ def _aware_utc_ts(value: datetime) -> pd.Timestamp:
 def _single_source_or_mixed(frame: pd.DataFrame) -> str:
     sources = sorted(str(source).lower() for source in frame["source"].dropna().unique())
     return sources[0] if len(sources) == 1 else "mixed"
+
+
+def _latest_daily_by_asof(frame: pd.DataFrame) -> pd.DataFrame:
+    """Collapse stored revisions to the latest visible row per source key."""
+
+    if frame.empty:
+        return frame
+    out = frame.sort_values(["symbol", "date", "source", "asof"])
+    out = out.drop_duplicates(["symbol", "date", "source"], keep="last")
+    return canonicalize_daily_bars(out)
+
+
+def _current_daily_view(frame: pd.DataFrame) -> pd.DataFrame:
+    """Return one latest-known row per symbol/date across available sources."""
+
+    latest_by_source = _latest_daily_by_asof(frame)
+    if latest_by_source.empty:
+        return latest_by_source
+    out = latest_by_source.sort_values(["symbol", "date", "asof", "source"])
+    out = out.drop_duplicates(["symbol", "date"], keep="last")
+    return canonicalize_daily_bars(out)
+
+
+@contextmanager
+def _exclusive_lock(path: Path) -> Iterator[None]:
+    """Serialize writers that update the same local dataset."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _atomic_write_parquet(frame: pd.DataFrame, path: Path) -> None:
+    """Write a complete Parquet file before atomically replacing the live file."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, raw_temp_path = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    os.close(fd)
+    temp_path = Path(raw_temp_path)
+    try:
+        frame.to_parquet(temp_path, index=False)
+        os.replace(temp_path, path)
+    finally:
+        temp_path.unlink(missing_ok=True)

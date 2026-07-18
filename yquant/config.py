@@ -7,10 +7,12 @@ environment.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 try:
     import tomllib
@@ -128,11 +130,13 @@ class AppConfig:
 
 def load_config(path: str | Path = "config.example.toml") -> AppConfig:
     config_path = Path(path)
-    if not config_path.exists():
-        raise ConfigError(f"config file does not exist: {config_path}")
-
-    with config_path.open("rb") as fh:
-        raw = tomllib.load(fh)
+    try:
+        with config_path.open("rb") as fh:
+            raw = tomllib.load(fh)
+    except FileNotFoundError as exc:
+        raise ConfigError(f"config file does not exist: {config_path}") from exc
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise ConfigError(f"cannot read config file {config_path}: {exc}") from exc
 
     try:
         runtime = _runtime_config(raw["runtime"])
@@ -142,10 +146,12 @@ def load_config(path: str | Path = "config.example.toml") -> AppConfig:
         cost = _cost_config(raw.get("cost"))
         notification = _notification_config(raw["notification"])
         schedule = _schedule_config(raw.get("schedule"))
+    except ConfigError:
+        raise
     except KeyError as exc:
         raise ConfigError(f"missing config section or key: {exc}") from exc
-    except TypeError as exc:
-        raise ConfigError(f"invalid config value type: {exc}") from exc
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ConfigError(f"invalid config value: {exc}") from exc
 
     return AppConfig(
         runtime=runtime,
@@ -159,8 +165,13 @@ def load_config(path: str | Path = "config.example.toml") -> AppConfig:
 
 
 def _runtime_config(raw: dict[str, Any]) -> RuntimeConfig:
+    timezone = str(raw["timezone"]).strip()
+    try:
+        ZoneInfo(timezone)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ConfigError(f"runtime.timezone is invalid: {timezone!r}") from exc
     return RuntimeConfig(
-        timezone=str(raw["timezone"]),
+        timezone=timezone,
         data_dir=Path(raw["data_dir"]),
         sqlite_path=Path(raw["sqlite_path"]),
         parquet_dir=Path(raw["parquet_dir"]),
@@ -190,7 +201,9 @@ def _llm_config(raw: dict[str, Any]) -> LLMConfig:
     # absent or null means the usage meter simply accounts spend with no alert.
     raw_alert = raw.get("daily_budget_alert_usd")
     daily_budget_alert = float(raw_alert) if raw_alert is not None else None
-    if daily_budget_alert is not None and daily_budget_alert <= 0:
+    if daily_budget_alert is not None and (
+        not math.isfinite(daily_budget_alert) or daily_budget_alert <= 0
+    ):
         raise ConfigError("llm.daily_budget_alert_usd must be positive when set")
     if timeout <= 0:
         raise ConfigError("llm.timeout_seconds must be positive")
@@ -235,10 +248,22 @@ def _risk_config(raw: dict[str, Any]) -> RiskConfig:
     _require_ratio("risk.industry_position_limit", cfg.industry_position_limit)
     _require_ratio("risk.drawdown_warning", cfg.drawdown_warning)
     _require_ratio("risk.drawdown_strong_warning", cfg.drawdown_strong_warning)
+    if cfg.overlay_single_position_limit > cfg.overlay_budget:
+        raise ConfigError(
+            "risk.overlay_single_position_limit must not exceed overlay_budget"
+        )
+    if cfg.leveraged_etf_total_limit > cfg.overlay_budget:
+        raise ConfigError("risk.leveraged_etf_total_limit must not exceed overlay_budget")
+    if cfg.leveraged_etf_single_limit > cfg.leveraged_etf_total_limit:
+        raise ConfigError(
+            "risk.leveraged_etf_single_limit must not exceed leveraged_etf_total_limit"
+        )
     if cfg.cooldown_loss_count <= 0:
         raise ConfigError("risk.cooldown_loss_count must be positive")
     if cfg.cooldown_trading_days <= 0:
         raise ConfigError("risk.cooldown_trading_days must be positive")
+    if cfg.drawdown_warning >= cfg.drawdown_strong_warning:
+        raise ConfigError("risk.drawdown_warning must be below drawdown_strong_warning")
     return cfg
 
 
@@ -262,8 +287,8 @@ def _cost_config(raw: dict[str, Any] | None) -> CostConfig:
         ("cost.slippage_rate_etf", cfg.slippage_rate_etf),
         ("cost.slippage_rate_single", cfg.slippage_rate_single),
     ):
-        if value < 0:
-            raise ConfigError(f"{name} must be non-negative")
+        if not math.isfinite(value) or value < 0:
+            raise ConfigError(f"{name} must be finite and non-negative")
     return cfg
 
 
@@ -315,5 +340,5 @@ def _optional_str(value: Any) -> str | None:
 
 
 def _require_ratio(name: str, value: float) -> None:
-    if not 0 < value < 1:
+    if not math.isfinite(value) or not 0 < value < 1:
         raise ConfigError(f"{name} must be between 0 and 1")

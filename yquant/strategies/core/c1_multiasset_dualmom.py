@@ -65,6 +65,8 @@ def dual_momentum_weights(
 
     if not 0.0 < budget <= 1.0:
         raise ValueError("budget must be in (0, 1]")
+    if top_n <= 0:
+        raise ValueError("top_n must be positive")
     if cash_symbol not in monthly_prices:
         raise ValueError(f"cash proxy {cash_symbol!r} missing from monthly_prices")
 

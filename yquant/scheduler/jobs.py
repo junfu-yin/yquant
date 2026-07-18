@@ -11,8 +11,9 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
 from yquant.config import AppConfig
 from yquant.datasrc.freshness import check_daily_bar_freshness, expected_daily_bar_deadline_utc
@@ -96,7 +97,7 @@ def build_job_context(
 def run_update_job(ctx: JobContext, *, on_date: date | None = None) -> JobOutcome:
     schedule = ctx.config.schedule
     symbols = list(schedule.symbols)
-    on = on_date or date.today()
+    on = on_date or _local_today(ctx)
     start = on - timedelta(days=schedule.history_days)
     base_detail: dict[str, Any] = {
         "symbols": symbols,
@@ -143,7 +144,7 @@ def run_update_job(ctx: JobContext, *, on_date: date | None = None) -> JobOutcom
 def run_freshness_job(ctx: JobContext, *, on_date: date | None = None) -> JobOutcome:
     schedule = ctx.config.schedule
     symbols = list(schedule.symbols)
-    on = on_date or date.today()
+    on = on_date or _local_today(ctx)
     if not symbols:
         return _finish(ctx, "daily_bars_freshness", "skipped", {"reason": "no symbols configured"})
 
@@ -181,7 +182,7 @@ def run_freshness_job(ctx: JobContext, *, on_date: date | None = None) -> JobOut
 def run_reconcile_live_job(ctx: JobContext, *, on_date: date | None = None) -> JobOutcome:
     schedule = ctx.config.schedule
     symbols = list(schedule.symbols)
-    on = on_date or date.today()
+    on = on_date or _local_today(ctx)
     start = on - timedelta(days=schedule.history_days)
     if not symbols:
         return _finish(
@@ -240,7 +241,7 @@ def run_regime_job(ctx: JobContext, *, on_date: date | None = None) -> JobOutcom
     The committed state is what M8's ``apply_risk_controls`` consumes downstream.
     """
 
-    on = on_date or date.today()
+    on = on_date or _local_today(ctx)
     try:
         memory = _load_regime_memory(ctx, before=on)
         inputs = ctx.regime_inputs_provider(ctx.repo, on)
@@ -347,8 +348,11 @@ def _finish(
     ctx.ledger.record_job_run(job=job, status=status, detail=detail)
     alerted = False
     if alert is not None and ctx.notifier is not None:
-        ctx.notifier.send(alert)
-        alerted = True
+        try:
+            ctx.notifier.send(alert)
+            alerted = True
+        except Exception as exc:  # noqa: BLE001 - alert delivery is best-effort
+            detail["alert_error"] = _error_text(exc)
     return JobOutcome(job=job, status=status, detail=detail, alerted=alerted)
 
 
@@ -361,3 +365,9 @@ def _error_alert(job_label: str, exc: BaseException) -> AlertMessage:
 
 def _error_text(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {exc}"
+
+
+def _local_today(ctx: JobContext) -> date:
+    """Return today's date in the configured business timezone."""
+
+    return datetime.now(UTC).astimezone(ZoneInfo(ctx.config.runtime.timezone)).date()

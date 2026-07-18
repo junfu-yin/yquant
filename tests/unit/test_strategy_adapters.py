@@ -52,6 +52,13 @@ def test_resample_picks_last_close_of_each_month() -> None:
     assert monthly["SPY"][0][1] == pytest.approx(100.5)
 
 
+def test_resample_is_independent_of_input_row_order() -> None:
+    bars = _month_end_bars(("SPY",), months=3)
+    shuffled = bars.sample(frac=1.0, random_state=7).reset_index(drop=True)
+
+    assert resample_to_month_end(shuffled) == resample_to_month_end(bars)
+
+
 def test_month_end_trading_dates_are_last_of_month() -> None:
     bars = _month_end_bars(("SPY",), months=2)
     assert month_end_trading_dates(bars) == {date(2020, 1, 27), date(2020, 2, 27)}

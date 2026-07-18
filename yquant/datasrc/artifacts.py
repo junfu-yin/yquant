@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from dataclasses import fields, is_dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -27,9 +29,9 @@ def write_report_artifact(
         "generated_at_utc": generated_at.isoformat(),
         "report": _report_payload(report),
     }
-    output_path.write_text(
+    _atomic_write_text(
+        output_path,
         json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True),
-        encoding="utf-8",
     )
     return output_path
 
@@ -86,3 +88,18 @@ def _normalize_kind(kind: str) -> str:
     if not normalized:
         raise ValueError("artifact kind must not be empty")
     return normalized
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    fd, raw_temp_path = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    os.close(fd)
+    temp_path = Path(raw_temp_path)
+    try:
+        temp_path.write_text(content, encoding="utf-8")
+        os.replace(temp_path, path)
+    finally:
+        temp_path.unlink(missing_ok=True)

@@ -11,6 +11,7 @@ Strategies produce a desired :class:`TargetPortfolio`; the M8 risk engine
 
 from __future__ import annotations
 
+import math
 from datetime import date
 from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
@@ -49,10 +50,16 @@ class TargetPortfolio(BaseModel):
     @model_validator(mode="after")
     def _check_no_leverage(self) -> TargetPortfolio:
         for symbol, weight in self.weights.items():
+            if not symbol.strip():
+                raise ValueError("portfolio symbols must not be empty")
+            if not math.isfinite(weight):
+                raise ValueError(f"weight for {symbol} must be finite")
             if weight < 0:
                 raise ValueError(f"weight for {symbol} must be non-negative (v1 is long-only)")
             if weight > 1:
                 raise ValueError(f"weight for {symbol} must not exceed 1")
+        if not math.isfinite(self.cash_weight):
+            raise ValueError("cash_weight must be finite")
         total = sum(self.weights.values()) + self.cash_weight
         if total > 1 + _WEIGHT_EPS:
             raise ValueError(f"total invested weight {total:.6f} exceeds 1 (no leverage)")

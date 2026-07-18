@@ -69,6 +69,7 @@ def compare_curves(
     bt = _equity_by_day(backtest)
     pp = _equity_by_day(paper)
     common = sorted(set(bt) & set(pp))
+    same_sessions = set(bt) == set(pp)
 
     max_daily_bps = 0.0
     worst_day: str | None = None
@@ -90,8 +91,10 @@ def compare_curves(
 
     passed = (
         len(common) > 0
+        and same_sessions
         and max_daily_bps <= daily_cap_bps
         and cumulative_bps <= cumulative_cap_bps
+        and backtest.digest() == paper.digest()
     )
     return ParityReport(
         sessions=len(common),

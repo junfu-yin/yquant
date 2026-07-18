@@ -20,6 +20,7 @@ ride on otherwise-generic item codes. The LLM (which lands later) only ever
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Literal
@@ -207,11 +208,19 @@ def parse_form4(record: dict[str, object]) -> Form4Filing:
         known = _ACQUISITION_CODES | _DISPOSITION_CODES
         if code not in known:
             raise ValueError(f"unknown Form 4 transaction code {code!r}")
+        shares = float(raw["shares"])
+        price_per_share = float(raw["price_per_share"])
+        if not math.isfinite(shares) or shares <= 0:
+            raise ValueError("Form 4 transaction shares must be finite and positive")
+        if not math.isfinite(price_per_share) or price_per_share < 0:
+            raise ValueError(
+                "Form 4 transaction price_per_share must be finite and non-negative"
+            )
         transactions.append(
             Form4Transaction(
                 transaction_code=code,
-                shares=float(raw["shares"]),
-                price_per_share=float(raw["price_per_share"]),
+                shares=shares,
+                price_per_share=price_per_share,
             )
         )
 

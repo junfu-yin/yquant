@@ -150,6 +150,20 @@ def test_parse_form4_rejects_unknown_transaction_code() -> None:
         )
 
 
+@pytest.mark.parametrize("shares", [-1.0, float("nan"), float("inf")])
+def test_parse_form4_rejects_invalid_shares(shares: float) -> None:
+    with pytest.raises(ValueError, match="shares"):
+        parse_form4(
+            {
+                "symbol": "NVDA",
+                "filed_at": "2024-02-15",
+                "transactions": [
+                    {"transaction_code": "P", "shares": shares, "price_per_share": 1.0}
+                ],
+            }
+        )
+
+
 def test_parse_form4_rejects_non_list_transactions() -> None:
     with pytest.raises(TypeError):
         parse_form4({"symbol": "NVDA", "filed_at": "2024-02-15", "transactions": {}})

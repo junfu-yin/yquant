@@ -24,6 +24,7 @@ from yquant.macro.schemas import (
     MacroEventCard,
     RiskDashboardItem,
     ThesisProposal,
+    condition_is_true,
     is_machine_readable_condition,
 )
 from yquant.risk.state_machine import RegimeState
@@ -155,6 +156,16 @@ def test_is_machine_readable_condition() -> None:
     assert is_machine_readable_condition("SPY loses 200dma at 420")
     assert not is_machine_readable_condition("if things get worse")
     assert not is_machine_readable_condition("below the trend")  # no number
+
+
+def test_condition_does_not_fall_back_to_unrelated_ticker_metric() -> None:
+    assert not condition_is_true("VIX > 30", "SPY", {"SPY": 500.0})
+    assert condition_is_true("VIX > 30", "SPY", {"VIX": 31.0, "SPY": 500.0})
+
+
+def test_committee_config_rejects_single_cap_above_total_cap() -> None:
+    with pytest.raises(ValueError, match="must not exceed"):
+        CommitteeConfig(overlay_total_cap=0.05, overlay_single_cap=0.10)
 
 
 def test_red_team_rejects_icebox_ticker() -> None:

@@ -323,15 +323,24 @@ def build_backtest_lab(report: dict[str, Any]) -> BacktestLabView:
     if missing:
         raise ReportContractError(f"report missing mandatory sections: {missing}")
     tiers = report["cost_sensitivity"]
+    if not isinstance(tiers, list) or not all(isinstance(row, dict) for row in tiers):
+        raise ReportContractError("cost_sensitivity must be a list of tier objects")
     tier_labels = {row.get("tier") for row in tiers}
     if not {"0x", "1x", "2x"}.issubset(tier_labels):
         raise ReportContractError("cost_sensitivity must cover the 0x/1x/2x tiers (T4)")
+    benchmark = report["benchmark"]
+    if not isinstance(benchmark, dict) or not benchmark:
+        raise ReportContractError("benchmark comparison is mandatory (US-6)")
+    walk_forward = report["walk_forward"]
+    warnings = report["warnings"]
+    if not isinstance(walk_forward, list) or not isinstance(warnings, list):
+        raise ReportContractError("walk_forward and warnings must be lists")
     return BacktestLabView(
         strategy=dict(report.get("strategy", {})),
-        benchmark=dict(report["benchmark"]),
+        benchmark=dict(benchmark),
         cost_sensitivity=list(tiers),
-        walk_forward=list(report["walk_forward"]),
-        warnings=list(report["warnings"]),
+        walk_forward=list(walk_forward),
+        warnings=[str(warning) for warning in warnings],
     )
 
 

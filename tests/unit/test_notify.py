@@ -164,6 +164,11 @@ def test_feishu_notifier_rejects_empty_url() -> None:
         FeishuNotifier("   ")
 
 
+def test_feishu_notifier_rejects_non_https_url() -> None:
+    with pytest.raises(ValueError, match="HTTPS"):
+        FeishuNotifier("http://example.test/hook")
+
+
 def test_notifier_from_env_returns_none_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = load_config("config.example.toml")
     monkeypatch.delenv(cfg.notification.feishu.webhook_env, raising=False)

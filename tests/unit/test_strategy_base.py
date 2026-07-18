@@ -25,6 +25,12 @@ def test_target_portfolio_rejects_negative_weight() -> None:
         TargetPortfolio(as_of=date(2024, 6, 3), weights={"SPY": -0.1})
 
 
+@pytest.mark.parametrize("weight", [float("nan"), float("inf"), float("-inf")])
+def test_target_portfolio_rejects_non_finite_weight(weight: float) -> None:
+    with pytest.raises(ValidationError, match="finite"):
+        TargetPortfolio(as_of=date(2024, 6, 3), weights={"SPY": weight})
+
+
 def test_target_portfolio_layer_weight() -> None:
     portfolio = TargetPortfolio(
         as_of=date(2024, 6, 3),

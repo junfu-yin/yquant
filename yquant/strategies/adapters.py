@@ -50,6 +50,7 @@ def resample_to_month_end(bars: pd.DataFrame) -> dict[str, list[tuple[date, floa
 
     out: dict[str, list[tuple[date, float]]] = {}
     for symbol, group in frame.groupby("symbol", sort=True):
+        group = group.sort_values("date")
         by_month: dict[tuple[int, int], tuple[date, float]] = {}
         for day, close in zip(group["date"], group["close"], strict=True):
             if pd.isna(close):
@@ -128,6 +129,8 @@ def make_dual_momentum_provider(
     proxy is priced) hold the current book (return ``None``).
     """
 
+    if min_history <= 0:
+        raise ValueError("min_history must be positive")
     monthly = resample_to_month_end(bars)
     rebalance_days = month_end_trading_dates(bars)
 
@@ -153,6 +156,8 @@ def make_sector_momentum_provider(
 ) -> TargetProvider:
     """Wrap S-A sector momentum into a monthly-rebalancing backtest provider."""
 
+    if min_history <= 0:
+        raise ValueError("min_history must be positive")
     monthly = resample_to_month_end(bars)
     rebalance_days = month_end_trading_dates(bars)
 

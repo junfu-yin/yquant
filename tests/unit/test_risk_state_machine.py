@@ -141,6 +141,17 @@ def test_stale_pillar_carries_last_score_not_neutral() -> None:
     assert carried == scores
 
 
+def test_non_finite_pillar_input_carries_last_score() -> None:
+    scores, _ = score_pillars(_bearish(), last_scores={})
+    invalid = _bearish()
+    invalid = RegimeInputs(**{**invalid.__dict__, "spy_close": float("nan")})
+
+    carried, stale = score_pillars(invalid, last_scores=scores)
+
+    assert "trend" in stale
+    assert carried["trend"] == scores["trend"]
+
+
 def test_missing_data_never_manufactures_a_regime_change() -> None:
     cfg = RegimeConfig(confirm_periods=1)
     machine = RegimeStateMachine(cfg, initial=RegimeState.NEUTRAL)

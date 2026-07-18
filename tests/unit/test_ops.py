@@ -102,7 +102,9 @@ def test_build_interval_book_has_four_layers_with_honest_kinds() -> None:
 
     satellite_rule = book.layer("satellite_rule")
     assert satellite_rule is not None and satellite_rule.kind == "numeric"
+    assert len(satellite_rule.bands) == 2
     assert satellite_rule.hard_caps["single_name"] == 0.05
+    assert satellite_rule.bands != core.bands
 
     satellite_llm = book.layer("satellite_llm")
     assert satellite_llm is not None
@@ -154,11 +156,48 @@ def test_daily_check_default_payload_flags_sentinel() -> None:
     assert sentinel.runbook_ref == "runbook §6.4"
 
 
+def test_daily_check_does_not_replace_explicit_empty_payload_with_demo() -> None:
+    with pytest.raises(KeyError):
+        build_daily_check({})
+
+
 def test_daily_check_all_clear_on_benign_payload() -> None:
     check = build_daily_check(_benign_payload())
     assert check.all_clear
     assert check.attention_items == ()
     assert all(item.runbook_ref is None for item in check.items)
+
+
+def test_daily_check_fails_closed_on_empty_health_maps() -> None:
+    payload = _benign_payload()
+    payload["system_health"] = {"data_freshness": {}, "p_metrics": {}}
+
+    attention = {item.key for item in build_daily_check(payload).attention_items}
+
+    assert {"data_freshness", "p_metrics"} <= attention
+
+
+def test_daily_check_recomputes_overlay_breach_from_weight() -> None:
+    payload = _benign_payload()
+    portfolio = payload["portfolio_risk"]
+    assert isinstance(portfolio, dict)
+    portfolio["overlay_breach"] = False
+    portfolio["layer_weights"] = {"overlay": 0.15}
+
+    attention = {item.key for item in build_daily_check(payload).attention_items}
+
+    assert "layer_budget" in attention
+
+
+def test_daily_check_fails_closed_on_invalid_overlay_weight() -> None:
+    payload = _benign_payload()
+    portfolio = payload["portfolio_risk"]
+    assert isinstance(portfolio, dict)
+    portfolio["layer_weights"] = {"overlay": "not-a-number"}
+
+    attention = {item.key for item in build_daily_check(payload).attention_items}
+
+    assert "layer_budget" in attention
 
 
 def test_daily_check_raises_on_all_attention_paths() -> None:

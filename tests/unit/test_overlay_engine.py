@@ -181,6 +181,19 @@ def test_open_admits_within_single_cap() -> None:
     assert position.notional_weight == pytest.approx(0.03)
 
 
+@pytest.mark.parametrize("weight", [-0.01, float("nan"), float("inf")])
+def test_open_rejects_invalid_weight(weight: float) -> None:
+    position, rejection = open_leverage_position(
+        _request(weight=weight),
+        regime=RegimeState.RISK_ON,
+        vix_level=15.0,
+    )
+
+    assert position is None
+    assert rejection is not None
+    assert rejection.rule in {"non_positive_weight", "non_finite_input"}
+
+
 # ----------------------------------------------------------- daily review ---
 
 

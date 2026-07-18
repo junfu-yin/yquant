@@ -62,3 +62,20 @@ def test_asof_accepts_naive_cutoff_as_utc(tmp_path: Path) -> None:
         ["AAPL"], date(2024, 1, 1), date(2024, 1, 31), datetime(2024, 1, 5)
     )
     assert not view.empty
+
+
+def test_asof_reconstructs_value_before_later_revision(tmp_path: Path) -> None:
+    repo = LocalDataRepo(tmp_path)
+    repo.write_daily_bars(_bars(datetime(2024, 1, 4, tzinfo=UTC), (100.0, 102.0)))
+    repo.write_daily_bars(_bars(datetime(2024, 1, 10, tzinfo=UTC), (101.0, 103.0)))
+
+    historical = repo.get_bars_asof(
+        ["AAPL"],
+        date(2024, 1, 1),
+        date(2024, 1, 31),
+        datetime(2024, 1, 5, tzinfo=UTC),
+    )
+    current = repo.get_bars(["AAPL"], date(2024, 1, 1), date(2024, 1, 31))
+
+    assert list(historical["close"]) == [100.0, 102.0]
+    assert list(current["close"]) == [101.0, 103.0]

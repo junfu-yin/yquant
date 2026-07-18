@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -1145,14 +1147,16 @@ def _split_symbols(raw: str) -> list[str]:
 
 
 def _parse_weights(raw: str | None, symbols: list[str]) -> dict[str, float]:
+    if not symbols:
+        raise ValueError("at least one symbol is required")
     if raw is None or not raw.strip():
         weight = 1.0 / len(symbols)
         return {symbol: weight for symbol in symbols}
     values = [float(chunk.strip()) for chunk in raw.split(",") if chunk.strip()]
     if len(values) != len(symbols):
         raise ValueError("--weights must have one value per symbol")
-    if any(value < 0 for value in values):
-        raise ValueError("--weights must be non-negative")
+    if any(not math.isfinite(value) or value < 0 for value in values):
+        raise ValueError("--weights must be finite and non-negative")
     if sum(values) > 1.0 + 1e-9:
         raise ValueError("--weights must sum to at most 1.0")
     return dict(zip(symbols, values, strict=True))
@@ -1196,8 +1200,11 @@ def _run_backtest(args: argparse.Namespace) -> int:
         if not symbols:
             raise ValueError("--symbols must include at least one ticker")
         weights = _parse_weights(args.weights, symbols)
-        if args.initial_cash <= 0:
-            raise ValueError("--initial-cash must be positive")
+        if not math.isfinite(args.initial_cash) or args.initial_cash <= 0:
+            raise ValueError("--initial-cash must be finite and positive")
+        benchmark_symbols = normalize_symbols([args.benchmark])
+        if len(benchmark_symbols) != 1:
+            raise ValueError("--benchmark must include exactly one ticker")
     except (ConfigError, ValueError) as exc:
         print(f"backtest error: {exc}", file=sys.stderr)
         return 2
@@ -1206,7 +1213,7 @@ def _run_backtest(args: argparse.Namespace) -> int:
     instruments: dict[str, Instrument] = {
         symbol: ("single_stock" if symbol in single_stocks else "etf") for symbol in symbols
     }
-    benchmark = normalize_symbols([args.benchmark])[0]
+    benchmark = benchmark_symbols[0]
 
     repo = LocalDataRepo(cfg.runtime.parquet_dir)
     load_symbols = sorted({*symbols, benchmark})
@@ -1256,8 +1263,7 @@ def _run_backtest(args: argparse.Namespace) -> int:
         print(f"rejections: {len(rejections)}")
 
     if args.output is not None:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        _atomic_write_text(args.output, json.dumps(report, indent=2))
         print(f"report_artifact: {args.output}")
     return 0
 
@@ -1367,8 +1373,8 @@ def _run_qa_panel(args: argparse.Namespace) -> int:
     )
     from yquant.qa.metrics import last_close_by_symbol
 
-    if args.initial_cash <= 0:
-        print("qa panel error: --initial-cash must be positive", file=sys.stderr)
+    if not math.isfinite(args.initial_cash) or args.initial_cash <= 0:
+        print("qa panel error: --initial-cash must be finite and positive", file=sys.stderr)
         return 2
     try:
         storage = build_golden_bars(args.window)
@@ -1409,8 +1415,7 @@ def _run_qa_panel(args: argparse.Namespace) -> int:
     print(panel.render_text())
 
     if args.output is not None:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(panel.as_dict(), indent=2), encoding="utf-8")
+        _atomic_write_text(args.output, json.dumps(panel.as_dict(), indent=2))
         print(f"panel_artifact: {args.output}")
     return 0 if panel.passed else 1
 
@@ -1436,9 +1441,8 @@ def _run_qa_drills(args: argparse.Namespace) -> int:
     print(f"records: {len(records)} (all contaminated; process check, not a performance claim)")
 
     if args.output is not None:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
         payload = {"records": [r.as_dict() for r in records]}
-        args.output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        _atomic_write_text(args.output, json.dumps(payload, indent=2))
         print(f"drill_ledger_artifact: {args.output}")
     return 0
 
@@ -1452,9 +1456,9 @@ def _run_qa_redlines(args: argparse.Namespace) -> int:
     print(panel.render_text())
 
     if args.output is not None:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(
-            json.dumps(panel.as_dict(), indent=2, ensure_ascii=False), encoding="utf-8"
+        _atomic_write_text(
+            args.output,
+            json.dumps(panel.as_dict(), indent=2, ensure_ascii=False),
         )
         print(f"red_line_panel_artifact: {args.output}")
 
@@ -1468,8 +1472,11 @@ def _run_paper(args: argparse.Namespace) -> int:
     from yquant.paper.parity import shadow_reconciliation
     from yquant.qa import build_golden_bars
 
-    if args.initial_cash <= 0:
-        print("paper error: --initial-cash must be positive", file=sys.stderr)
+    if not math.isfinite(args.initial_cash) or args.initial_cash <= 0:
+        print("paper error: --initial-cash must be finite and positive", file=sys.stderr)
+        return 2
+    if args.min_sessions <= 0:
+        print("paper error: --min-sessions must be positive", file=sys.stderr)
         return 2
     try:
         storage = build_golden_bars(args.window)
@@ -1500,8 +1507,7 @@ def _run_paper(args: argparse.Namespace) -> int:
     print(f"shadow_verdict: {verdict}")
 
     if args.output is not None:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(report.as_dict(), indent=2), encoding="utf-8")
+        _atomic_write_text(args.output, json.dumps(report.as_dict(), indent=2))
         print(f"shadow_artifact: {args.output}")
     return 0 if report.passed else 1
 
@@ -1529,8 +1535,7 @@ def _run_brief_eval(args: argparse.Namespace) -> int:
     print(f"eval_verdict: {verdict}")
 
     if args.output is not None:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(metrics.as_dict(), indent=2), encoding="utf-8")
+        _atomic_write_text(args.output, json.dumps(metrics.as_dict(), indent=2))
         print(f"eval_artifact: {args.output}")
     return 0 if metrics.passed else 1
 
@@ -1556,8 +1561,7 @@ def _run_macro_calibrate(args: argparse.Namespace) -> int:
     print(f"calibration_verdict: {verdict}")
 
     if args.output is not None:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(report.as_dict(), indent=2), encoding="utf-8")
+        _atomic_write_text(args.output, json.dumps(report.as_dict(), indent=2))
         print(f"calibration_artifact: {args.output}")
     return 0 if report.passed else 1
 
@@ -1608,8 +1612,7 @@ def _run_ui_demo(args: argparse.Namespace) -> int:
     )
 
     if args.output is not None:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        _atomic_write_text(args.output, json.dumps(payload, indent=2, ensure_ascii=False))
         print(f"demo_payload_artifact: {args.output}")
     return 0
 
@@ -1645,9 +1648,9 @@ def _run_overlay_paper_book(args: argparse.Namespace) -> int:
         )
 
     if args.output is not None:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(
-            json.dumps(stats.as_dict(), indent=2, ensure_ascii=False), encoding="utf-8"
+        _atomic_write_text(
+            args.output,
+            json.dumps(stats.as_dict(), indent=2, ensure_ascii=False),
         )
         print(f"paper_book_artifact: {args.output}")
     return 0
@@ -1682,9 +1685,9 @@ def _run_ops_daily_check(args: argparse.Namespace) -> int:
     print(f"verdict: {verdict}")
 
     if args.output is not None:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(
-            json.dumps(check.as_dict(), indent=2, ensure_ascii=False), encoding="utf-8"
+        _atomic_write_text(
+            args.output,
+            json.dumps(check.as_dict(), indent=2, ensure_ascii=False),
         )
         print(f"daily_check_artifact: {args.output}")
     return 0
@@ -1710,9 +1713,9 @@ def _run_ops_interval_book(args: argparse.Namespace) -> int:
             print(f"      hard_caps: {caps}")
 
     if args.output is not None:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(
-            json.dumps(book.as_dict(), indent=2, ensure_ascii=False), encoding="utf-8"
+        _atomic_write_text(
+            args.output,
+            json.dumps(book.as_dict(), indent=2, ensure_ascii=False),
         )
         print(f"interval_book_artifact: {args.output}")
     return 0
@@ -1733,9 +1736,9 @@ def _run_ops_runbook(args: argparse.Namespace) -> int:
 
     if args.output is not None:
         payload = {"runbook": runbook.as_dict(), "alert_binding_gaps": gaps}
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+        _atomic_write_text(
+            args.output,
+            json.dumps(payload, indent=2, ensure_ascii=False),
         )
         print(f"runbook_artifact: {args.output}")
     return 0
@@ -1781,9 +1784,9 @@ def _run_governance_panel(args: argparse.Namespace) -> int:
 
     if args.output is not None:
         payload = {"panel": panel.as_dict(), "thesis_recall": recall}
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+        _atomic_write_text(
+            args.output,
+            json.dumps(payload, indent=2, ensure_ascii=False),
         )
         print(f"governance_panel_artifact: {args.output}")
     return 0
@@ -1839,8 +1842,7 @@ def _run_ledger_collect(args: argparse.Namespace) -> int:
     print(f"kinds: {', '.join(evidence.kinds) if evidence.kinds else '(none)'}")
     print(f"replay_strict_ok: {evidence.replay.strict_ok}")
     if args.output is not None:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(evidence.as_dict(), indent=2), encoding="utf-8")
+        _atomic_write_text(args.output, json.dumps(evidence.as_dict(), indent=2))
         print(f"evidence_bundle: {args.output}")
     return 0
 
@@ -1891,6 +1893,24 @@ def _quality_output_dir(data_dir: Path, override: Path | None) -> Path:
     return override if override is not None else data_dir / "quality"
 
 
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Write a CLI artifact completely before replacing its destination."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, raw_temp_path = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    os.close(fd)
+    temp_path = Path(raw_temp_path)
+    try:
+        temp_path.write_text(content, encoding="utf-8")
+        os.replace(temp_path, path)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
 def _daily_bar_source(source_name: str) -> DailyBarSource:
     try:
         return build_daily_bar_source(source_name)
@@ -1927,6 +1947,9 @@ def _run_probe(args: argparse.Namespace) -> int:
 
 
 def _run_probe_all(args: argparse.Namespace) -> int:
+    if args.timeout_seconds <= 0:
+        print("probe all error: --timeout-seconds must be positive", file=sys.stderr)
+        return 2
     commands = [
         ("yfinance", ["probe", "yfinance", "--us-symbol", args.us_symbol,
                       "--index-symbol", args.index_symbol]),

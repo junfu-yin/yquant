@@ -46,6 +46,12 @@ class ProviderGovernanceRow:
         present, and green behavior tests when a black-box profile is present.
         """
 
+        if self.is_trading and self.card.kind == "llm" and self.offline is None:
+            return False
+        if self.offline is not None and self.offline.provider_id != self.card.provider_id:
+            return False
+        if self.blackbox is not None and self.blackbox.provider_id != self.card.provider_id:
+            return False
         if self.offline is not None and self.offline.credited.count == 0:
             return False
         return not (self.blackbox is not None and not self.blackbox.behavior_all_green)

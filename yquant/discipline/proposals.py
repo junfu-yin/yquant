@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 
 from yquant.discipline.overlay_guardrails import (
@@ -105,7 +105,13 @@ def build_proposals(
     lot_sizes = lot_sizes or {}
     related_events = related_events or {}
     proposal_metadata = proposal_metadata or {}
-    created_at = now or datetime.now()
+    if not math.isfinite(portfolio_value) or portfolio_value <= 0:
+        raise ValueError("portfolio_value must be finite and positive")
+    if not math.isfinite(min_weight_change) or min_weight_change < 0:
+        raise ValueError("min_weight_change must be finite and non-negative")
+    if any(not math.isfinite(weight) or weight < 0 for weight in current_weights.values()):
+        raise ValueError("current_weights must be finite and non-negative")
+    created_at = now or datetime.now(UTC)
     proposals: list[TradeProposal] = []
     effective_layers = _effective_target_layers(controlled, proposal_metadata)
     overlay_weight_after = _overlay_weight_after(controlled, effective_layers)
@@ -142,6 +148,8 @@ def build_proposals(
         price = prices.get(symbol)
         if price is None:
             continue
+        if not math.isfinite(price) or price <= 0:
+            raise ValueError(f"price for {symbol} must be finite and positive")
         trade_value = abs(delta) * portfolio_value
         shares = suggested_shares(
             trade_value,

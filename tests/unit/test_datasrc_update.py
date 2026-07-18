@@ -135,7 +135,8 @@ def test_reconcile_daily_bars_counts_missing_rows() -> None:
     assert report.compared_rows == 1
     assert report.missing_left_rows == 1
     assert report.missing_right_rows == 0
-    assert report.passed
+    assert report.consistency_rate == 0.5
+    assert not report.passed
 
 
 def test_local_repo_can_filter_canonical_storage_by_source(tmp_path: Path) -> None:

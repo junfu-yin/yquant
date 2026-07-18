@@ -248,11 +248,19 @@ def test_drift_sentinel_ladder_and_ood_gate() -> None:
         ood_threshold=3.0,
     )
     assert FeatureDrift("ok", 0.1).status == "ok"
+    assert FeatureDrift("warn-boundary", PSI_WARN).status == "warn"
+    assert FeatureDrift("freeze-boundary", PSI_FREEZE).status == "freeze_candidate"
     assert FeatureDrift("warn", PSI_WARN + 0.01).status == "warn"
     assert FeatureDrift("freeze", PSI_FREEZE + 0.01).status == "freeze_candidate"
     assert sentinel.worst_status == "freeze_candidate"
     assert sentinel.forces_abstain(3.5) is True
     assert sentinel.forces_abstain(2.5) is False
+    assert sentinel.forces_abstain(float("nan")) is True
+
+
+def test_feature_drift_rejects_non_finite_psi() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        FeatureDrift("feature", float("nan"))
 
 
 def test_behavior_tests_execute_predicates() -> None:
@@ -354,6 +362,15 @@ def test_governance_panel_blocks_fully_contaminated_provider() -> None:
         )
     }
     panel = build_governance_panel([llm], offline_reports=offline)
+    assert panel.blocked_provider_ids == (llm.provider_id,)
+    assert panel.passed is False
+
+
+def test_governance_panel_blocks_trading_llm_without_offline_report() -> None:
+    llm = _llm_card(date(2024, 1, 1))
+
+    panel = build_governance_panel([llm])
+
     assert panel.blocked_provider_ids == (llm.provider_id,)
     assert panel.passed is False
 

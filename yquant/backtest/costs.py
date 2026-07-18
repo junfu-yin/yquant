@@ -8,7 +8,7 @@ configurable placeholders pending WP0 AS-8 Selfwealth fee verification.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Literal
 
 Side = Literal["buy", "sell"]
@@ -31,6 +31,18 @@ class UsCostModel:
     finra_taf_cap: Decimal = Decimal("8.30")  # per-trade TAF cap
     slippage_rate_etf: Decimal = Decimal("0.0005")  # 0.05% of notional (ETF)
     slippage_rate_single: Decimal = Decimal("0.0010")  # 0.10% of notional (single stock)
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("commission_per_trade", self.commission_per_trade),
+            ("sec_fee_rate", self.sec_fee_rate),
+            ("finra_taf_per_share", self.finra_taf_per_share),
+            ("finra_taf_cap", self.finra_taf_cap),
+            ("slippage_rate_etf", self.slippage_rate_etf),
+            ("slippage_rate_single", self.slippage_rate_single),
+        ):
+            if not value.is_finite() or value < 0:
+                raise ValueError(f"{name} must be finite and non-negative")
 
     def slippage_rate_for(self, instrument: Instrument) -> Decimal:
         """Return the slippage rate for one instrument kind."""
@@ -96,6 +108,17 @@ def us_trade_cost(
 
     ``instrument`` selects the slippage tier (ETF 0.05% vs single-stock 0.10%).
     """
+
+    if side not in ("buy", "sell"):
+        raise ValueError("side must be 'buy' or 'sell'")
+    if instrument not in ("etf", "single_stock"):
+        raise ValueError("instrument must be 'etf' or 'single_stock'")
+    try:
+        valid_inputs = shares.is_finite() and price.is_finite() and shares > 0 and price > 0
+    except InvalidOperation as exc:
+        raise ValueError("shares and price must be finite and positive") from exc
+    if not valid_inputs:
+        raise ValueError("shares and price must be finite and positive")
 
     model = model or UsCostModel()
     notional = shares * price

@@ -17,6 +17,7 @@ rule, so "LLM 不产订单" holds and the whole pass is replayable.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -47,6 +48,14 @@ class CommitteeConfig:
     overlay_total_cap: float = OVERLAY_TOTAL_CAP
     overlay_single_cap: float = OVERLAY_SINGLE_CAP
     icebox_tickers: frozenset[str] = _ICEBOX_TICKERS
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.overlay_total_cap) or not 0 < self.overlay_total_cap <= 1:
+            raise ValueError("overlay_total_cap must be finite and in (0, 1]")
+        if not math.isfinite(self.overlay_single_cap) or not 0 < self.overlay_single_cap <= 1:
+            raise ValueError("overlay_single_cap must be finite and in (0, 1]")
+        if self.overlay_single_cap > self.overlay_total_cap:
+            raise ValueError("overlay_single_cap must not exceed overlay_total_cap")
 
 
 def _regime_vetoes_long(state: RegimeState) -> bool:

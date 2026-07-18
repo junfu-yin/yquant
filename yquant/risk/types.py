@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
@@ -26,6 +27,30 @@ class RiskState:
     circuit_breaker_ratio: float = 1.5
     drawdown_freeze_at: float = 0.10
     drawdown_liquidate_at: float = 0.15
+
+    def __post_init__(self) -> None:
+        positive = (
+            self.target_vol,
+            self.target_vol_floor,
+            self.adv_liquidation_cap,
+            self.vol_target_trigger_ratio,
+            self.circuit_breaker_ratio,
+            self.drawdown_freeze_at,
+            self.drawdown_liquidate_at,
+        )
+        if not all(math.isfinite(value) and value > 0 for value in positive):
+            raise ValueError("risk-state thresholds must be finite and positive")
+        if any(
+            not symbol.strip() or not math.isfinite(cap) or not 0 < cap <= 1
+            for symbol, cap in self.concentration_caps.items()
+        ):
+            raise ValueError("concentration caps must have symbols and be in (0, 1]")
+        if not 0 < self.adv_liquidation_cap <= 1:
+            raise ValueError("adv_liquidation_cap must be in (0, 1]")
+        if self.drawdown_liquidate_at > 1:
+            raise ValueError("drawdown thresholds must not exceed 1")
+        if self.drawdown_freeze_at >= self.drawdown_liquidate_at:
+            raise ValueError("drawdown_freeze_at must be below drawdown_liquidate_at")
 
 
 @dataclass(frozen=True)
@@ -76,3 +101,27 @@ class RiskInputs:
     asset_classes: dict[str, str] = field(default_factory=dict)
     trend_ok: dict[str, bool] = field(default_factory=dict)
     portfolio_drawdown: float = 0.0
+
+    def __post_init__(self) -> None:
+        scalars = (
+            self.predicted_annual_vol,
+            self.portfolio_value,
+            self.portfolio_drawdown,
+            *self.weekly_realized_vol,
+            *self.adv.values(),
+            *self.position_value.values(),
+        )
+        if not all(math.isfinite(value) for value in scalars):
+            raise ValueError("risk inputs must be finite")
+        non_negative = (
+            self.predicted_annual_vol,
+            self.portfolio_value,
+            self.portfolio_drawdown,
+            *self.weekly_realized_vol,
+            *self.adv.values(),
+            *self.position_value.values(),
+        )
+        if any(value < 0 for value in non_negative):
+            raise ValueError("risk inputs must be non-negative")
+        if self.portfolio_drawdown > 1:
+            raise ValueError("portfolio_drawdown must not exceed 1")

@@ -173,9 +173,26 @@ class LedgerStore:
     ) -> list[int]:
         """Persist multiple risk events, returning their row ids in order."""
 
-        return [
-            self.record_risk_event(event, recorded_at_utc=recorded_at_utc) for event in events
-        ]
+        if not events:
+            return []
+        recorded_at = _aware_utc(recorded_at_utc or datetime.now(UTC))
+        rows = [event.to_row() for event in events]
+        with closing(self._connect()) as conn:
+            cursors = [
+                conn.execute(
+                    "INSERT INTO risk_events (ts_utc, date, rule, detail_json) "
+                    "VALUES (?, ?, ?, ?)",
+                    (
+                        recorded_at.isoformat(),
+                        str(row["date"]),
+                        str(row["rule"]),
+                        json.dumps(row["detail_json"], ensure_ascii=True, sort_keys=True),
+                    ),
+                )
+                for row in rows
+            ]
+            conn.commit()
+            return [int(cursor.lastrowid or 0) for cursor in cursors]
 
     def record_job_run(
         self,
@@ -291,15 +308,12 @@ class LedgerStore:
         re-run of the daily pipeline never double-books a fact.
         """
 
-        existing = self.get_event_by_dedup(event.dedup_key)
-        if existing is not None:
-            return existing
-
         with closing(self._connect()) as conn:
             cursor = conn.execute(
                 "INSERT INTO decision_events "
                 "(event_id, ts_utc, kind, run_id, dedup_key, causation_id, "
-                "payload_json, provenance_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "payload_json, provenance_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(dedup_key) DO NOTHING",
                 (
                     event.event_id,
                     event.ts.astimezone(UTC).isoformat(),
@@ -314,7 +328,16 @@ class LedgerStore:
                 ),
             )
             conn.commit()
-            return EventRecord(id=int(cursor.lastrowid or 0), event=event)
+            if cursor.rowcount == 1:
+                return EventRecord(id=int(cursor.lastrowid or 0), event=event)
+            row = conn.execute(
+                "SELECT id, event_id, ts_utc, kind, run_id, dedup_key, causation_id, "
+                "payload_json, provenance_json FROM decision_events WHERE dedup_key = ?",
+                (event.dedup_key,),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("deduplicated event could not be read back")
+            return _row_to_event_record(row)
 
     def get_event_by_dedup(self, dedup_key: str) -> EventRecord | None:
         rows = self._fetch_where(
@@ -466,6 +489,8 @@ class LedgerStore:
     def _fetch(self, query: str, limit: int | None) -> list[tuple[Any, ...]]:
         with closing(self._connect()) as conn:
             if limit is not None:
+                if limit < 0:
+                    raise ValueError("limit must be non-negative")
                 cursor = conn.execute(f"{query} LIMIT ?", (int(limit),))
             else:
                 cursor = conn.execute(query)
@@ -476,7 +501,9 @@ class LedgerStore:
             return list(conn.execute(query, params).fetchall())
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.sqlite_path)
+        conn = sqlite3.connect(self.sqlite_path, timeout=30.0)
+        conn.execute("PRAGMA busy_timeout = 30000")
+        return conn
 
 
 def compute_merkle_root(events: list[Event]) -> str:

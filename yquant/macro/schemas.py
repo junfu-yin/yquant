@@ -18,6 +18,7 @@ so the deterministic guardrail layer never has to trust prose.
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping
 from datetime import date
@@ -108,14 +109,21 @@ def _keyword_comparator(lowered: str) -> str | None:
 
 def _resolve_probe(left: str, ticker: str, metrics: Mapping[str, float]) -> float | None:
     key = left.strip().upper()
-    if key in metrics:
-        return metrics[key]
-    if ticker.upper() in metrics:
-        return metrics[ticker.upper()]
-    for name, value in metrics.items():  # a left side naming a bare metric symbol.
-        if name.upper() in key:
-            return value
+    normalized_metrics = {str(name).strip().upper(): value for name, value in metrics.items()}
+    if key in normalized_metrics:
+        return _finite_metric(normalized_metrics[key])
+    for name, value in normalized_metrics.items():
+        if re.search(rf"(?<![A-Z0-9_]){re.escape(name)}(?![A-Z0-9_])", key):
+            return _finite_metric(value)
     return None
+
+
+def _finite_metric(value: float) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) else None
 
 
 def _first_number(text: str) -> float | None:
@@ -194,7 +202,10 @@ class ThesisProposal(BaseModel):
     @field_validator("us_ticker")
     @classmethod
     def _upper_ticker(cls, value: str) -> str:
-        return value.strip().upper()
+        ticker = value.strip().upper()
+        if not ticker:
+            raise ValueError("us_ticker must not be empty")
+        return ticker
 
 
 class OpportunityBookEntry(BaseModel):
@@ -218,6 +229,14 @@ class OpportunityBookEntry(BaseModel):
                 "invalidation_condition must be machine-readable (03 §5.9 red line)"
             )
         return value
+
+    @field_validator("us_ticker")
+    @classmethod
+    def _upper_ticker(cls, value: str) -> str:
+        ticker = value.strip().upper()
+        if not ticker:
+            raise ValueError("us_ticker must not be empty")
+        return ticker
 
 
 class RiskDashboardItem(BaseModel):

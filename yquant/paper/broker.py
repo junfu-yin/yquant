@@ -23,6 +23,7 @@ reproduces bit-for-bit, so the whole run is replayable (07).
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date
@@ -54,6 +55,17 @@ class PaperConfig:
     min_weight_change: float = 0.0
     # Reconciliation must balance to the cent (08 §2 "分毫必平").
     reconcile_tolerance_usd: float = 0.005
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.initial_cash) or self.initial_cash < 0:
+            raise ValueError("initial_cash must be finite and non-negative")
+        if not math.isfinite(self.min_weight_change) or self.min_weight_change < 0:
+            raise ValueError("min_weight_change must be finite and non-negative")
+        if (
+            not math.isfinite(self.reconcile_tolerance_usd)
+            or self.reconcile_tolerance_usd < 0
+        ):
+            raise ValueError("reconcile_tolerance_usd must be finite and non-negative")
 
 
 @dataclass(frozen=True)
@@ -103,6 +115,8 @@ class PaperBroker:
         self._warnings: list[str] = []
         self._reconciliations: list[ReconcileTick] = []
         self._frozen = False
+        self._trading_dates = frozenset(trading_dates)
+        self._last_session: date | None = None
 
     @property
     def frozen(self) -> bool:
@@ -128,6 +142,13 @@ class PaperBroker:
         settlement and marking run — the safety valve 08 §2 mandates.
         """
 
+        if day not in self._trading_dates:
+            raise ValueError(f"{day.isoformat()} is not a configured trading date")
+        if self._last_session is not None and day <= self._last_session:
+            raise ValueError("paper sessions must be processed once in strictly increasing order")
+        if any(not math.isfinite(price) or price <= 0 for price in closes_today.values()):
+            raise ValueError("session closes must be finite and positive")
+
         frozen_now = self._frozen
         effective_provider: TargetProvider = (
             (lambda _day, _closes: None) if frozen_now else target_provider
@@ -146,6 +167,7 @@ class PaperBroker:
         point = EquityPoint(day=day, equity=equity)
         self._equity_curve.append(point)
         self._reconcile(day, equity)
+        self._last_session = day
         return point
 
     def _reconcile(self, day: date, curve_equity: float) -> None:

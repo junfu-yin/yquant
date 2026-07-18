@@ -171,6 +171,16 @@ def test_frozen_session_bypasses_target_provider() -> None:
     assert broker.result().final_positions == {}
 
 
+def test_paper_broker_rejects_duplicate_session() -> None:
+    day = date(2024, 1, 2)
+    broker = PaperBroker(trading_dates=[day])
+    provider = _provider_factory()()
+    broker.on_session(day=day, closes_today={"SPY": 100.0}, target_provider=provider)
+
+    with pytest.raises(ValueError, match="strictly increasing"):
+        broker.on_session(day=day, closes_today={"SPY": 100.0}, target_provider=provider)
+
+
 def test_realized_fill_applies_adverse_slippage() -> None:
     trade = IntendedTrade(
         day=date(2024, 1, 2), symbol="SPY", side="buy", shares=10, assumed_price=100.0
@@ -211,12 +221,12 @@ def test_realized_fill_on_halt_does_not_fill() -> None:
     assert fill.reason == "halted"
 
 
-def test_realized_fill_zero_assumed_price_reports_zero_bps() -> None:
+def test_realized_fill_rejects_zero_assumed_price() -> None:
     trade = IntendedTrade(
         day=date(2024, 1, 2), symbol="SPY", side="buy", shares=10, assumed_price=0.0
     )
-    fill = realized_fill(trade, SessionBar(open=100.0, low=99.0, high=101.0))
-    assert fill.slippage_bps == 0.0
+    with pytest.raises(ValueError, match="assumed_price"):
+        realized_fill(trade, SessionBar(open=100.0, low=99.0, high=101.0))
 
 
 def test_backfill_execution_quality_summarizes_slippage() -> None:
@@ -288,6 +298,14 @@ def test_compare_curves_detects_drift_and_records_worst_day() -> None:
     assert not report.passed
 
 
+def test_compare_curves_rejects_missing_session_even_when_overlap_matches() -> None:
+    days = [date(2024, 1, 2), date(2024, 1, 3)]
+    backtest = _curve([(days[0], 50_000.0), (days[1], 50_000.0)])
+    paper = _curve([(days[0], 50_000.0)])
+
+    assert not compare_curves(backtest, paper).passed
+
+
 def test_compare_curves_skips_zero_base_equity() -> None:
     days = [date(2024, 1, 2), date(2024, 1, 3)]
     backtest = _curve([(days[0], 0.0), (days[1], 0.0)])
@@ -306,4 +324,3 @@ def test_reconcile_tick_and_frozen_property_serialize() -> None:
     assert payload["balanced"] is True
     assert payload["frozen_next_session"] is False
     assert not broker.frozen
-

@@ -10,6 +10,16 @@ from yquant.risk.trend_gate import apply_trend_gate
 from yquant.strategies.base import TargetPortfolio
 
 
+def test_risk_inputs_reject_non_finite_value() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        RiskInputs(predicted_annual_vol=float("nan"))
+
+
+def test_risk_state_rejects_inverted_drawdown_thresholds() -> None:
+    with pytest.raises(ValueError, match="drawdown_freeze_at"):
+        RiskState(drawdown_freeze_at=0.20, drawdown_liquidate_at=0.15)
+
+
 def test_trend_gate_drops_below_trend_asset_to_cash() -> None:
     portfolio = TargetPortfolio(
         as_of=date(2024, 6, 3),

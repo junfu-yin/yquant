@@ -1,6 +1,9 @@
 from decimal import Decimal
 
+import pytest
+
 from yquant.backtest.costs import (
+    UsCostModel,
     trade_cost,
     us_trade_cost,
 )
@@ -61,3 +64,13 @@ def test_trade_cost_rejects_inactive_markets() -> None:
 def test_cost_breakdown_total_sums_components() -> None:
     cost = us_trade_cost("sell", Decimal("100"), Decimal("350"))
     assert cost.total == cost.commission + cost.slippage + cost.regulatory_fees
+
+
+def test_cost_model_rejects_non_finite_rate() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        UsCostModel(slippage_rate_etf=Decimal("NaN"))
+
+
+def test_trade_cost_rejects_non_positive_quantity() -> None:
+    with pytest.raises(ValueError, match="positive"):
+        us_trade_cost("buy", Decimal("0"), Decimal("100"))

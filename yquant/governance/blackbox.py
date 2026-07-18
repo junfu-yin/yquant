@@ -94,11 +94,17 @@ class FeatureDrift:
     feature: str
     psi: float
 
+    def __post_init__(self) -> None:
+        if not self.feature.strip():
+            raise ValueError("feature must not be empty")
+        if not math.isfinite(self.psi) or self.psi < 0:
+            raise ValueError("psi must be finite and non-negative")
+
     @property
     def status(self) -> str:
-        if self.psi > PSI_FREEZE:
+        if self.psi >= PSI_FREEZE:
             return "freeze_candidate"
-        if self.psi > PSI_WARN:
+        if self.psi >= PSI_WARN:
             return "warn"
         return "ok"
 
@@ -113,6 +119,10 @@ class DriftSentinel:
     feature_drifts: tuple[FeatureDrift, ...]
     ood_threshold: float
 
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.ood_threshold) or self.ood_threshold < 0:
+            raise ValueError("ood_threshold must be finite and non-negative")
+
     @property
     def worst_status(self) -> str:
         order = {"ok": 0, "warn": 1, "freeze_candidate": 2}
@@ -125,7 +135,11 @@ class DriftSentinel:
     def forces_abstain(self, inference_ood_score: float) -> bool:
         """A per-inference OOD score above the threshold forces ``abstain`` (09 §3-3)."""
 
-        return inference_ood_score > self.ood_threshold
+        return (
+            not math.isfinite(inference_ood_score)
+            or inference_ood_score < 0
+            or inference_ood_score > self.ood_threshold
+        )
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -240,6 +254,8 @@ def population_stability_index(
 
     if not expected or not actual:
         raise ValueError("both distributions must be non-empty")
+    if not all(math.isfinite(value) for value in (*expected, *actual)):
+        raise ValueError("PSI distributions must contain only finite values")
     pooled = sorted([*expected, *actual])
     n_edges = 10
     edges = [
@@ -276,6 +292,24 @@ def build_blackbox_profile(
     Behavior tests are executed here (their predicates are pure) so the profile
     carries pass/fail outcomes the CI gate and the UI can read directly.
     """
+
+    if not provider_id.strip():
+        raise ValueError("provider_id must not be empty")
+    if not math.isfinite(ood_threshold) or ood_threshold < 0:
+        raise ValueError("ood_threshold must be finite and non-negative")
+    if any(
+        not math.isfinite(value)
+        for observation in observations
+        for value in (observation.predicted, observation.realized)
+    ):
+        raise ValueError("observations must contain only finite values")
+    if any(not math.isfinite(drift.psi) or drift.psi < 0 for drift in feature_drifts):
+        raise ValueError("feature PSI values must be finite and non-negative")
+    if any(
+        not name.strip() or not math.isfinite(contribution)
+        for name, contribution in top_features
+    ):
+        raise ValueError("feature contributions must have names and finite values")
 
     dashboard = _build_dashboard(observations)
     attribution = AttributionPanel(

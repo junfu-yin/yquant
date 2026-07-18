@@ -20,13 +20,13 @@ class QaPanel:
 
     @property
     def passed(self) -> bool:
-        """True only when no ``block``-severity metric failed.
+        """True only when no blocking or S1 metric failed.
 
-        S1/S2/info failures surface on the board but do not fail the gate here;
-        the CI matrix decides how to treat non-blocking regressions (06 §7).
+        S1 denotes an immediate action condition and cannot produce a green board.
+        S2/info failures remain visible without blocking this aggregate gate.
         """
 
-        return not any(r.severity == "block" and not r.passed for r in self.results)
+        return not any(r.severity in {"block", "S1"} and not r.passed for r in self.results)
 
     @property
     def failures(self) -> tuple[MetricResult, ...]:
@@ -38,7 +38,7 @@ class QaPanel:
             "total": len(self.results),
             "failed": len(self.failures),
             "blocking_failures": [
-                r.metric for r in self.failures if r.severity == "block"
+                r.metric for r in self.failures if r.severity in {"block", "S1"}
             ],
             "metrics": [r.as_dict() for r in self.results],
         }

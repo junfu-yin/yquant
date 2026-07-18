@@ -17,6 +17,7 @@ Checks (in read order):
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -78,7 +79,7 @@ def build_daily_check(payload: dict[str, Any] | None = None) -> DailyCheck:
     stale reference cannot slip in.
     """
 
-    data = payload or build_demo_payload().to_dict()
+    data = build_demo_payload().to_dict() if payload is None else payload
     runbook = build_runbook()
     brief = data["today_brief"]
     opportunity = data["opportunity_risk"]
@@ -90,13 +91,14 @@ def build_daily_check(payload: dict[str, Any] | None = None) -> DailyCheck:
     # 1. data freshness
     freshness = health.get("data_freshness", {})
     stale = sorted(k for k, v in freshness.items() if "stale" in str(v).lower())
+    freshness_ok = bool(freshness) and not stale
     items.append(
         CheckItem(
             key="data_freshness",
             label="数据新鲜度",
-            ok=not stale,
-            detail="所有序列新鲜" if not stale else f"陈旧序列: {stale}",
-            runbook_ref=None if not stale else "runbook §6.2",
+            ok=freshness_ok,
+            detail="所有序列新鲜" if freshness_ok else f"陈旧或缺失序列: {stale}",
+            runbook_ref=None if freshness_ok else "runbook §6.2",
         )
     )
 
@@ -131,8 +133,18 @@ def build_daily_check(payload: dict[str, Any] | None = None) -> DailyCheck:
     )
 
     # 4. layer budget (Overlay hard cap)
-    overlay_breach = bool(portfolio.get("overlay_breach"))
-    overlay_weight = portfolio["layer_weights"].get("overlay", 0.0)
+    layer_weights = portfolio.get("layer_weights", {})
+    try:
+        overlay_weight = float(layer_weights.get("overlay", 0.0))
+    except (TypeError, ValueError):
+        overlay_weight = float("nan")
+    overlay_breach = (
+        not layer_weights
+        or not math.isfinite(overlay_weight)
+        or overlay_weight < 0
+        or bool(portfolio.get("overlay_breach"))
+        or overlay_weight > 0.10 + 1e-9
+    )
     items.append(
         CheckItem(
             key="layer_budget",
@@ -146,13 +158,14 @@ def build_daily_check(payload: dict[str, Any] | None = None) -> DailyCheck:
     # 5. system health P-metrics
     p_metrics = health.get("p_metrics", {})
     failing = sorted(k for k, v in p_metrics.items() if str(v).upper() != "PASS")
+    p_metrics_ok = bool(p_metrics) and not failing
     items.append(
         CheckItem(
             key="p_metrics",
             label="系统健康",
-            ok=not failing,
-            detail="P 指标全绿" if not failing else f"未通过: {failing}",
-            runbook_ref=None if not failing else "runbook §6.1",
+            ok=p_metrics_ok,
+            detail="P 指标全绿" if p_metrics_ok else f"未通过或缺失: {failing}",
+            runbook_ref=None if p_metrics_ok else "runbook §6.1",
         )
     )
 

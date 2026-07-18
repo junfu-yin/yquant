@@ -126,9 +126,9 @@ def test_live_reconciliation_records_per_source_fetch_failures() -> None:
 
     assert report.left_fetch_failures == 1
     assert report.right_fetch_failures == 0
-    # AAPL is present on both sides and matches, but the MSFT fetch failure
-    # keeps the overall job from passing even though compared rows are clean.
-    assert report.reconciliation.passed
+    # AAPL is present on both sides and matches, while MSFT is missing on the
+    # failed side. Missing rows count against reconciliation consistency.
+    assert not report.reconciliation.passed
     assert not report.passed
 
 

@@ -12,6 +12,7 @@ side here is the frozen next-session bar, not a live wall clock.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -95,6 +96,20 @@ def realized_fill(
             filled=False,
             reason="halted",
         )
+
+    values = (
+        trade.assumed_price,
+        float(trade.shares),
+        bar.open,
+        bar.low,
+        bar.high,
+    )
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("trade and bar values must be finite")
+    if trade.shares <= 0 or trade.assumed_price <= 0:
+        raise ValueError("trade shares and assumed_price must be positive")
+    if bar.low <= 0 or bar.open <= 0 or bar.high <= 0 or not bar.low <= bar.open <= bar.high:
+        raise ValueError("bar must satisfy 0 < low <= open <= high")
 
     cost_model = model or UsCostModel()
     rate = float(cost_model.slippage_rate_for(trade.instrument))

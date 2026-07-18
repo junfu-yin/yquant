@@ -22,9 +22,14 @@ import pandas as pd
 from yquant.datasrc.bars import repo_view
 from yquant.ops.interval_book import IntervalBook, build_interval_book
 from yquant.strategies.core.c1_multiasset_dualmom import DEFAULT_ASSET_POOL
+from yquant.strategies.satellite import GICS_SECTOR_ETFS
 
 _DEMO_ASOF = date(2025, 1, 1)
-_POOL: tuple[str, ...] = tuple(sleeve.etf for sleeve in DEFAULT_ASSET_POOL)
+_POOL: tuple[str, ...] = tuple(
+    dict.fromkeys(
+        [*(sleeve.etf for sleeve in DEFAULT_ASSET_POOL), *GICS_SECTOR_ETFS]
+    )
+)
 
 
 def _unit_noise(symbol: str, day: date, salt: str) -> float:

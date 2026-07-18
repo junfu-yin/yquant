@@ -22,6 +22,7 @@ before this executor ever sees them.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -123,7 +124,7 @@ def three_condition_gate(
         failed.append("regime_not_risk_on")
     if not above_10m_ma:
         failed.append("below_10m_ma")
-    if vix_level >= VIX_OPEN_MAX:
+    if not math.isfinite(vix_level) or vix_level < 0 or vix_level >= VIX_OPEN_MAX:
         failed.append("vix_not_below_20")
     return failed
 
@@ -146,6 +147,29 @@ def open_leverage_position(
     """
 
     ticker = request.ticker.strip().upper()
+    numeric_inputs = (
+        request.weight,
+        sleeve_notional_before,
+        total_cap,
+        single_cap,
+        vix_level,
+    )
+    if not all(math.isfinite(value) for value in numeric_inputs):
+        return None, LeverageRejection(
+            ticker=ticker,
+            rule="non_finite_input",
+        )
+    if request.weight <= 0:
+        return None, LeverageRejection(
+            ticker=ticker,
+            rule="non_positive_weight",
+            detail={"weight": request.weight},
+        )
+    if sleeve_notional_before < 0 or total_cap <= 0 or single_cap <= 0:
+        return None, LeverageRejection(
+            ticker=ticker,
+            rule="invalid_budget",
+        )
 
     kind = classify_2x(ticker)
     if kind in {"leveraged_3x", "inverse"}:
@@ -240,7 +264,7 @@ def review_leverage_positions(
         reason: str | None = None
         if regime is not RegimeState.RISK_ON:
             reason = f"regime_downgrade:{regime.value}"
-        elif vix_level >= VIX_OPEN_MAX:
+        elif not math.isfinite(vix_level) or vix_level < 0 or vix_level >= VIX_OPEN_MAX:
             reason = "vix_not_below_20"
         elif condition_is_true(pos.invalidation_condition, pos.ticker, metrics):
             reason = "invalidation_hit"

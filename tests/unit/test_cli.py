@@ -10,6 +10,7 @@ import yquant.cli as cli
 from yquant.cli import (
     _daily_bar_sources,
     _parse_deadline_utc,
+    _parse_weights,
     _run_data_reconcile,
     _run_data_reconcile_live,
     _split_symbols,
@@ -198,6 +199,15 @@ def test_schedule_parser_accepts_run_once_job() -> None:
     assert args.schedule_command == "run-once"
     assert args.job == "reconcile-live"
     assert args.on_date == "2024-01-31"
+
+
+def test_parse_weights_rejects_non_finite_values() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        _parse_weights("nan", ["SPY"])
+
+
+def test_probe_all_rejects_non_positive_timeout() -> None:
+    assert cli.main(["probe", "all", "--timeout-seconds", "0"]) == 2
 
 
 def test_schedule_list_cli_reports_configured_jobs(capsys: pytest.CaptureFixture[str]) -> None:

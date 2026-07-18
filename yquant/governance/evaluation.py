@@ -15,6 +15,7 @@ inflation the leak would have produced.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -141,6 +142,12 @@ def evaluate_offline(
     admission — it produces the evidence the ladder (09 §6) reads.
     """
 
+    if any(
+        not math.isfinite(value)
+        for sample in samples
+        for value in (sample.predicted, sample.realized)
+    ):
+        raise ValueError("evaluation samples must contain only finite scores")
     credited_samples, contaminated_samples = split_on_cutoff(samples, card.knowledge_cutoff)
     return OfflineEvaluationReport(
         provider_id=card.provider_id,

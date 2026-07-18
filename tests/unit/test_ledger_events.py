@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -163,6 +164,21 @@ def test_append_event_is_idempotent_on_dedup_key(tmp_path: Path) -> None:
     )
 
     assert first.id == second.id
+    assert len(store.list_events()) == 1
+
+
+def test_append_event_is_idempotent_under_concurrency(tmp_path: Path) -> None:
+    store = LedgerStore(tmp_path / "ledger.db")
+    store.bootstrap()
+    events = [
+        _event(event_id=new_event_id(entropy=index.to_bytes(10, "big")))
+        for index in range(12)
+    ]
+
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        records = list(pool.map(store.append_event, events))
+
+    assert len({record.id for record in records}) == 1
     assert len(store.list_events()) == 1
 
 

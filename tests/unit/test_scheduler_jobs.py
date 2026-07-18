@@ -114,6 +114,23 @@ def test_freshness_job_failure_alerts_and_ledgers(tmp_path: Path) -> None:
     assert ctx.ledger.list_job_runs()[-1].status == "failed"
 
 
+def test_notification_failure_does_not_escape_job_boundary(tmp_path: Path) -> None:
+    cfg = _config(tmp_path, symbols=("AAPL",))
+    ctx = _context(cfg)
+
+    class _FailingNotifier:
+        def send(self, message: AlertMessage) -> None:
+            raise RuntimeError("webhook unavailable")
+
+    ctx.notifier = _FailingNotifier()
+    outcome = run_freshness_job(ctx, on_date=date(2024, 1, 31))
+
+    assert outcome.status == "failed"
+    assert outcome.alerted is False
+    assert outcome.detail["alert_error"] == "RuntimeError: webhook unavailable"
+    assert ctx.ledger.list_job_runs()[-1].status == "failed"
+
+
 class _FakeSource:
     def __init__(self, name: str, frames: dict[str, pd.DataFrame], fail: bool = False) -> None:
         self.name = name

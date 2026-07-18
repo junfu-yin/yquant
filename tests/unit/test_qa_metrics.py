@@ -169,16 +169,15 @@ def test_p4_continuity_flags_unadjusted_split_jump() -> None:
     assert p4.detail["discontinuities"]
 
 
-def test_p4_continuity_skips_non_positive_prev_close() -> None:
-    # A zero/None-priced prior day (e.g. a suspended listing) is skipped rather
-    # than dividing by zero; the surrounding series stays continuous.
+def test_p4_continuity_fails_closed_on_non_positive_close() -> None:
     closes = [
         (date(2024, 1, 2), 0.0),
         (date(2024, 1, 3), 100.0),
         (date(2024, 1, 4), 101.0),
     ]
     p4 = check_p4_adjusted_price_continuity(closes, event_dates=[date(2024, 1, 3)])
-    assert p4.passed
+    assert not p4.passed
+    assert p4.detail["invalid_price_dates"] == ["2024-01-02"]
 
 
 # ---- P6 --------------------------------------------------------------------
@@ -252,6 +251,14 @@ def test_p11_layer_budget_passes_within_caps() -> None:
     assert ok.passed
 
 
+def test_p11_layer_budget_fails_closed_on_non_finite_weight() -> None:
+    result = check_p11_layer_budget({"core": 0.8, "overlay": float("nan")})
+
+    assert not result.passed
+    assert result.severity == "S1"
+    assert "invalid_weight" in cast(list[str], result.detail["violations"])
+
+
 # ---- Panel -----------------------------------------------------------------
 
 
@@ -268,12 +275,13 @@ def test_panel_orders_and_reports_blocking_verdict() -> None:
     assert "RED" in panel.render_text()
 
 
-def test_panel_green_when_only_non_blocking_fails() -> None:
+def test_panel_red_when_s1_fails() -> None:
     results = [
         MetricResult("P1", "acct", True, "block", {}),
         MetricResult("P11", "layer", False, "S1", {}),
     ]
     panel = build_panel(results)
-    assert panel.passed  # S1 failure does not block the panel verdict
-    assert "GREEN" in panel.render_text()
+    assert not panel.passed
+    assert panel.as_dict()["blocking_failures"] == ["P11"]
+    assert "RED" in panel.render_text()
     assert len(panel.failures) == 1

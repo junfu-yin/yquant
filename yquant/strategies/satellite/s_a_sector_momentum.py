@@ -53,6 +53,8 @@ def sector_momentum_weights(
 
     if not 0.0 < budget <= 1.0:
         raise ValueError("budget must be in (0, 1]")
+    if top_n <= 0:
+        raise ValueError("top_n must be positive")
 
     momentum = {
         etf: total_return(prices, 12, skip=1)
@@ -78,6 +80,10 @@ class SectorMomentumProvider:
     provider_id = PROVIDER_ID
 
     def __init__(self, lookback_months: int = 14, top_n: int = 3) -> None:
+        if lookback_months < 14:
+            raise ValueError("lookback_months must be at least 14 for 12-1 momentum")
+        if top_n <= 0:
+            raise ValueError("top_n must be positive")
         self._lookback_months = lookback_months
         self._top_n = top_n
 
@@ -147,6 +153,7 @@ def _monthly_closes(
 
     out: dict[str, list[float]] = {}
     for symbol, group in frame.groupby("symbol", sort=True):
+        group = group.sort_values("date")
         by_month: dict[tuple[int, int], float] = {}
         for day, close in zip(group["date"], group["close"], strict=True):
             if pd.isna(close):
